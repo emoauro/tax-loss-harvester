@@ -837,6 +837,18 @@ const TaxLossHarvester = () => {
       date: changeDate,
       ratio: parseFloat(changeRatio) || 1
     }]);
+    // Clear price errors for the old ticker since it's being remapped
+    setPriceErrors(prev => {
+      const updated = { ...prev };
+      delete updated[oldTicker.toUpperCase()];
+      return updated;
+    });
+    // Clear any stored price for the old ticker
+    setCurrentPrices(prev => {
+      const updated = { ...prev };
+      delete updated[oldTicker.toUpperCase()];
+      return updated;
+    });
     setOldTicker('');
     setNewTicker('');
     setChangeDate('');
@@ -3168,11 +3180,53 @@ const TaxLossHarvester = () => {
             {activeView === 'detail' && renderPositionDetail()}
             {activeView === 'lots' && renderTaxLots()}
             {activeView === 'tax' && renderTaxSummary()}
-          </>
-        )}
+        </>
+      )}
+      
+      {/* Buy Me a Coffee Footer */}
+      <div style={{ 
+        marginTop: '48px', 
+        paddingTop: '24px', 
+        borderTop: '1px solid rgba(51, 65, 85, 0.6)',
+        textAlign: 'center'
+      }}>
+        <a 
+          href="https://buymeacoffee.com/emoauro" 
+          target="_blank" 
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '12px 24px',
+            background: 'linear-gradient(to right, #FFDD00, #FBB034)',
+            color: '#000000',
+            fontWeight: '600',
+            borderRadius: '12px',
+            textDecoration: 'none',
+            fontSize: '15px',
+            transition: 'transform 0.2s, box-shadow 0.2s',
+            boxShadow: '0 4px 12px rgba(251, 176, 52, 0.3)'
+          }}
+          onMouseOver={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.boxShadow = '0 6px 16px rgba(251, 176, 52, 0.4)';
+          }}
+          onMouseOut={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.boxShadow = '0 4px 12px rgba(251, 176, 52, 0.3)';
+          }}
+        >
+          <span style={{ fontSize: '20px' }}>☕</span>
+          Buy me a coffee
+        </a>
+        <p style={{ color: '#64748b', fontSize: '13px', marginTop: '12px' }}>
+          If this tool saved you time, consider supporting its development!
+        </p>
       </div>
     </div>
-  );
+  </div>
+);
 };
 
 export default TaxLossHarvester;

@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   
@@ -13,13 +12,12 @@ export default async function handler(req, res) {
     let url;
     
     if (type === 'splits') {
-      // Fetch stock splits
-      const period1 = Math.floor(Date.now() / 1000) - (10 * 365 * 24 * 60 * 60); // 10 years ago
+      // Use period1/period2 for splits (20 years of history)
+      const period1 = Math.floor(Date.now() / 1000) - (20 * 365 * 24 * 60 * 60);
       const period2 = Math.floor(Date.now() / 1000);
-      url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&events=splits`;
+      url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?period1=${period1}&period2=${period2}&interval=3mo&events=splits`;
     } else {
-      // Fetch current price
-      url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=1d`;
+      url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=5d`;
     }
 
     const response = await fetch(url, {
