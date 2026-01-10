@@ -619,7 +619,7 @@ const TaxLossHarvester = () => {
   };
 
   // Fetch stock splits from Yahoo Finance
- const fetchStockSplits = async (symbol) => {
+ const fetchStockSplits = async (symbol, showAlerts = true) => {
     if (!symbol) return;
     
     setFetchingSplits(true);
@@ -642,7 +642,7 @@ const TaxLossHarvester = () => {
       const splits = result?.events?.splits;
       
       if (!splits || Object.keys(splits).length === 0) {
-        alert(`No stock splits found for ${upperSymbol}`);
+        // No alert for "no splits found" - that's normal for most stocks
         setFetchingSplits(false);
         return;
       }
@@ -663,16 +663,18 @@ const TaxLossHarvester = () => {
         s => !existingSplitKeys.has(`${s.symbol}-${s.date}`)
       );
       
-      if (splitsToAdd.length === 0) {
-        alert(`All splits for ${upperSymbol} are already in your list`);
-      } else {
-        setStockSplits([...stockSplits, ...splitsToAdd]);
-        alert(`Added ${splitsToAdd.length} split(s) for ${upperSymbol}`);
+      if (splitsToAdd.length > 0) {
+        setStockSplits(prev => [...prev, ...splitsToAdd]);
+        if (showAlerts) {
+          alert(`Added ${splitsToAdd.length} split(s) for ${upperSymbol}`);
+        }
       }
       
       setSplitFetchSymbol('');
     } catch (error) {
-      alert(`Error fetching splits for ${upperSymbol}: ${error.message}`);
+      if (showAlerts) {
+        alert(`Error fetching splits for ${upperSymbol}: ${error.message}`);
+      }
     }
     
     setFetchingSplits(false);
@@ -1707,57 +1709,13 @@ const TaxLossHarvester = () => {
                 cursor: 'pointer'
               }}
             >
-              {showSplitForm ? 'Cancel' : '+ Add Split'}
+              {showSplitForm ? 'Cancel' : '+ Add Manually'}
             </button>
-          </div>
-
-          {/* Fetch Splits from API */}
-          <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '14px', color: '#10b981', marginBottom: '4px', fontWeight: '500' }}>
-                  Auto-fetch splits from Yahoo Finance
-                </label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    placeholder="Enter symbol (e.g., AAPL)"
-                    value={splitFetchSymbol}
-                    onChange={(e) => setSplitFetchSymbol(e.target.value.toUpperCase())}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && splitFetchSymbol) {
-                        fetchStockSplits(splitFetchSymbol);
-                      }
-                    }}
-                    style={{ flex: 1, padding: '8px 12px', background: '#334155', border: '1px solid #475569', borderRadius: '8px', color: '#f1f5f9', outline: 'none' }}
-                  />
-                  <button
-                    onClick={() => fetchStockSplits(splitFetchSymbol)}
-                    disabled={fetchingSplits || !splitFetchSymbol}
-                    style={{
-                      padding: '8px 16px',
-                      background: fetchingSplits ? '#475569' : '#10b981',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      fontWeight: '500',
-                      cursor: fetchingSplits || !splitFetchSymbol ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px'
-                    }}
-                  >
-                    {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
-                    Fetch Splits
-                  </button>
-                </div>
-              </div>
-            </div>
           </div>
 
           {showSplitForm && (
             <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
-              <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '12px' }}>Or add manually:</p>
+              <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '12px' }}>Add split manually:</p>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '12px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '14px', color: '#94a3b8', marginBottom: '4px' }}>Symbol</label>
@@ -1801,25 +1759,153 @@ const TaxLossHarvester = () => {
             </div>
           )}
 
-          {stockSplits.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {stockSplits.map((split, index) => (
-                <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '18px' }}>{split.symbol}</span>
-                    <span style={{ color: '#94a3b8' }}>Split Date: {new Date(split.date).toLocaleDateString()}</span>
-                    <span style={{ color: '#94a3b8' }}>Ratio: {split.ratio}:1</span>
-                  </div>
-                  <button
-                    onClick={() => removeSplit(index)}
-                    style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px' }}
-                  >
-                    Remove
-                  </button>
+          {/* Fetch All Splits Table */}
+          {allPositionDetails.filter(p => !isOptionSymbol(p.symbol)).length > 0 && (
+            <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <div>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>Fetch Splits for Open Positions</span>
+                  <span style={{ marginLeft: '12px', fontSize: '14px', color: '#94a3b8' }}>
+                    {stockSplits.length > 0 ? `${[...new Set(stockSplits.map(s => s.symbol))].length} symbols have splits` : 'No splits fetched yet'}
+                  </span>
                 </div>
-              ))}
+                <button
+                  onClick={async () => {
+                    const symbols = allPositionDetails
+                      .filter(p => !isOptionSymbol(p.symbol))
+                      .map(p => p.symbol);
+                    setFetchingSplits(true);
+                    for (const symbol of symbols) {
+                      await fetchStockSplits(symbol, false);
+                      await new Promise(resolve => setTimeout(resolve, 300));
+                    }
+                    setFetchingSplits(false);
+                  }}
+                  disabled={fetchingSplits}
+                  style={{
+                    padding: '8px 16px',
+                    background: fetchingSplits ? '#475569' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: '500',
+                    cursor: fetchingSplits ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
+                  {fetchingSplits ? 'Fetching...' : 'Fetch All Splits'}
+                </button>
+              </div>
+              
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Units</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Splits Found</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allPositionDetails
+                      .filter(p => !isOptionSymbol(p.symbol))
+                      .map(pos => {
+                        const symbolSplits = stockSplits.filter(s => s.symbol === pos.symbol);
+                        const hasSplits = symbolSplits.length > 0;
+                        return (
+                          <tr key={pos.symbol} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
+                            <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>{pos.symbol}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '14px', color: '#94a3b8' }}>{pos.totalUnits.toFixed(4)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                              {hasSplits ? (
+                                <span style={{ 
+                                  padding: '4px 10px', 
+                                  background: 'rgba(16, 185, 129, 0.2)', 
+                                  color: '#34d399', 
+                                  borderRadius: '12px', 
+                                  fontSize: '12px',
+                                  fontWeight: '500'
+                                }}>
+                                  {symbolSplits.length} split{symbolSplits.length > 1 ? 's' : ''}
+                                </span>
+                              ) : (
+                                <span style={{ 
+                                  padding: '4px 10px', 
+                                  background: 'rgba(100, 116, 139, 0.2)', 
+                                  color: '#94a3b8', 
+                                  borderRadius: '12px', 
+                                  fontSize: '12px' 
+                                }}>
+                                  None
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                              <button
+                                onClick={() => fetchStockSplits(pos.symbol)}
+                                disabled={fetchingSplits}
+                                style={{
+                                  padding: '4px 12px',
+                                  background: 'transparent',
+                                  color: '#10b981',
+                                  border: '1px solid rgba(16, 185, 129, 0.5)',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  cursor: fetchingSplits ? 'not-allowed' : 'pointer'
+                                }}
+                              >
+                                {hasSplits ? 'Refresh' : 'Fetch'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          ) : !showSplitForm && (
+          )}
+
+          {/* Existing Splits List */}
+          {stockSplits.length > 0 && (
+            <div>
+              <h4 style={{ fontSize: '14px', fontWeight: '600', color: '#94a3b8', marginBottom: '12px' }}>Recorded Splits ({stockSplits.length})</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {stockSplits
+                  .sort((a, b) => new Date(b.date) - new Date(a.date))
+                  .map((split, index) => (
+                  <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                      <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
+                      <span style={{ color: '#94a3b8', fontSize: '14px' }}>{new Date(split.date).toLocaleDateString()}</span>
+                      <span style={{ 
+                        padding: '4px 10px', 
+                        background: 'rgba(59, 130, 246, 0.2)', 
+                        color: '#60a5fa', 
+                        borderRadius: '6px', 
+                        fontSize: '13px',
+                        fontWeight: '500'
+                      }}>
+                        {split.ratio}:1
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => removeSplit(index)}
+                      style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {stockSplits.length === 0 && !showSplitForm && allPositionDetails.filter(p => !isOptionSymbol(p.symbol)).length === 0 && (
             <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured</p>
           )}
         </div>
