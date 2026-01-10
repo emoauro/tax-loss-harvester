@@ -415,6 +415,7 @@ const TaxLossHarvester = () => {
   const [priceErrors, setPriceErrors] = useState({});
   const [splitFetchSymbol, setSplitFetchSymbol] = useState('');
   const [lastPriceFetch, setLastPriceFetch] = useState(null);
+  const [checkedSplitSymbols, setCheckedSplitSymbols] = useState(new Set());
 
   // Save to localStorage whenever data changes
   useEffect(() => {
@@ -619,7 +620,7 @@ const TaxLossHarvester = () => {
   };
 
   // Fetch stock splits from Yahoo Finance
- const fetchStockSplits = async (symbol, showAlerts = true) => {
+const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => {
     if (!symbol) return;
     
     setFetchingSplits(true);
@@ -642,18 +643,29 @@ const TaxLossHarvester = () => {
       const splits = result?.events?.splits;
       
       if (!splits || Object.keys(splits).length === 0) {
-        // No alert for "no splits found" - that's normal for most stocks
         setFetchingSplits(false);
-        return;
+        return { found: 0, added: 0 };
       }
       
-      const newSplits = Object.entries(splits).map(([timestamp, splitData]) => ({
+      let newSplits = Object.entries(splits).map(([timestamp, splitData]) => ({
         symbol: upperSymbol,
         date: new Date(parseInt(timestamp) * 1000).toISOString().split('T')[0],
         ratio: splitData.numerator / splitData.denominator,
         numerator: splitData.numerator,
-        denominator: splitData.denominator
+        denominator: splitData.denominator,
+        dateObj: new Date(parseInt(timestamp) * 1000)
       }));
+      
+      // Filter by date range if provided (only splits during holding period)
+      if (dateRange && dateRange.start && dateRange.end) {
+        newSplits = newSplits.filter(split => {
+          const splitDate = split.dateObj;
+          return splitDate >= dateRange.start && splitDate <= dateRange.end;
+        });
+      }
+      
+      // Remove dateObj before storing
+      newSplits = newSplits.map(({ dateObj, ...rest }) => rest);
       
       const existingSplitKeys = new Set(
         stockSplits.map(s => `${s.symbol}-${s.date}`)
@@ -671,13 +683,15 @@ const TaxLossHarvester = () => {
       }
       
       setSplitFetchSymbol('');
+      setFetchingSplits(false);
+      return { found: newSplits.length, added: splitsToAdd.length };
     } catch (error) {
       if (showAlerts) {
         alert(`Error fetching splits for ${upperSymbol}: ${error.message}`);
       }
+      setFetchingSplits(false);
+      return { found: 0, added: 0, error: error.message };
     }
-    
-    setFetchingSplits(false);
   };
 
   // ============================================
@@ -1438,6 +1452,57 @@ const TaxLossHarvester = () => {
     };
   }, [transactions, currentPrices, stockSplits, tickerChanges, currentDate]);
 
+// Get all traded symbols (open + closed) with their holding periods
+  const allTradedSymbols = useMemo(() => {
+    const symbolData = {};
+    
+    // Process all transactions to find first buy and last sell for each symbol
+    transactions.forEach(t => {
+      const symbol = t.Symbol;
+      if (!symbol || isOptionSymbol(symbol)) return;
+      
+      const date = new Date(t.Date);
+      const type = (t['Transaction Type'] || '').toUpperCase();
+      
+      if (!symbolData[symbol]) {
+        symbolData[symbol] = { 
+          firstBuy: null, 
+          lastActivity: null,
+          isOpen: false 
+        };
+      }
+      
+      if (['PURCHASED', 'BUY', 'BOUGHT'].includes(type)) {
+        if (!symbolData[symbol].firstBuy || date < symbolData[symbol].firstBuy) {
+          symbolData[symbol].firstBuy = date;
+        }
+      }
+      
+      // Track last activity date (buy or sell)
+      if (!symbolData[symbol].lastActivity || date > symbolData[symbol].lastActivity) {
+        symbolData[symbol].lastActivity = date;
+      }
+    });
+    
+    // Mark which symbols are still open
+    allPositionDetails.forEach(p => {
+      if (symbolData[p.symbol]) {
+        symbolData[p.symbol].isOpen = true;
+        symbolData[p.symbol].lastActivity = currentDate; // Still holding, so use current date
+      }
+    });
+    
+    return Object.entries(symbolData)
+      .filter(([_, data]) => data.firstBuy) // Must have at least one purchase
+      .map(([symbol, data]) => ({
+        symbol,
+        firstBuy: data.firstBuy,
+        lastActivity: data.lastActivity,
+        isOpen: data.isOpen
+      }))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }, [transactions, allPositionDetails, currentDate]);
+
   const { 
     positions, 
     optionsPositions,
@@ -1695,7 +1760,7 @@ const TaxLossHarvester = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
               <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Stock Splits</h3>
-              <p style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>Adjust historical positions for stock splits</p>
+              <p style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>Fetches splits that occurred during your holding period for each ticker</p>
             </div>
             <button
               onClick={() => setShowSplitForm(!showSplitForm)}
@@ -1760,25 +1825,31 @@ const TaxLossHarvester = () => {
           )}
 
           {/* Fetch All Splits Table */}
-          {allPositionDetails.filter(p => !isOptionSymbol(p.symbol)).length > 0 && (
+          {allTradedSymbols.length > 0 && (
             <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <div>
-                  <span style={{ fontWeight: '600', color: '#10b981' }}>Fetch Splits for Open Positions</span>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>All Traded Symbols</span>
                   <span style={{ marginLeft: '12px', fontSize: '14px', color: '#94a3b8' }}>
-                    {stockSplits.length > 0 ? `${[...new Set(stockSplits.map(s => s.symbol))].length} symbols have splits` : 'No splits fetched yet'}
+                    {allTradedSymbols.length} symbols · {[...new Set(stockSplits.map(s => s.symbol))].length} with splits
                   </span>
                 </div>
                 <button
                   onClick={async () => {
-                    const symbols = allPositionDetails
-                      .filter(p => !isOptionSymbol(p.symbol))
-                      .map(p => p.symbol);
                     setFetchingSplits(true);
-                    for (const symbol of symbols) {
-                      await fetchStockSplits(symbol, false);
+                    const newChecked = new Set();
+                    
+                    for (const item of allTradedSymbols) {
+                      const dateRange = {
+                        start: item.firstBuy,
+                        end: item.lastActivity
+                      };
+                      await fetchStockSplits(item.symbol, false, dateRange);
+                      newChecked.add(item.symbol);
                       await new Promise(resolve => setTimeout(resolve, 300));
                     }
+                    
+                    setCheckedSplitSymbols(newChecked);
                     setFetchingSplits(false);
                   }}
                   disabled={fetchingSplits}
@@ -1800,73 +1871,105 @@ const TaxLossHarvester = () => {
                 </button>
               </div>
               
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
-                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Units</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Splits Found</th>
-                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {allPositionDetails
-                      .filter(p => !isOptionSymbol(p.symbol))
-                      .map(pos => {
-                        const symbolSplits = stockSplits.filter(s => s.symbol === pos.symbol);
-                        const hasSplits = symbolSplits.length > 0;
-                        return (
-                          <tr key={pos.symbol} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
-                            <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>{pos.symbol}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '14px', color: '#94a3b8' }}>{pos.totalUnits.toFixed(4)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                              {hasSplits ? (
-                                <span style={{ 
-                                  padding: '4px 10px', 
-                                  background: 'rgba(16, 185, 129, 0.2)', 
-                                  color: '#34d399', 
-                                  borderRadius: '12px', 
-                                  fontSize: '12px',
-                                  fontWeight: '500'
-                                }}>
-                                  {symbolSplits.length} split{symbolSplits.length > 1 ? 's' : ''}
-                                </span>
-                              ) : (
-                                <span style={{ 
-                                  padding: '4px 10px', 
-                                  background: 'rgba(100, 116, 139, 0.2)', 
-                                  color: '#94a3b8', 
-                                  borderRadius: '12px', 
-                                  fontSize: '12px' 
-                                }}>
-                                  None
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                              <button
-                                onClick={() => fetchStockSplits(pos.symbol)}
-                                disabled={fetchingSplits}
-                                style={{
-                                  padding: '4px 12px',
-                                  background: 'transparent',
-                                  color: '#10b981',
-                                  border: '1px solid rgba(16, 185, 129, 0.5)',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  cursor: fetchingSplits ? 'not-allowed' : 'pointer'
-                                }}
-                              >
-                                {hasSplits ? 'Refresh' : 'Fetch'}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
+              {/* Show table: before fetch = all symbols, after fetch = only those with splits */}
+              {(() => {
+                const symbolsToShow = checkedSplitSymbols.size > 0
+                  ? allTradedSymbols.filter(item => stockSplits.some(s => s.symbol === item.symbol))
+                  : allTradedSymbols;
+                
+                if (checkedSplitSymbols.size > 0 && symbolsToShow.length === 0) {
+                  return (
+                    <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8' }}>
+                      <span style={{ fontSize: '24px', marginRight: '8px' }}>✓</span>
+                      No stock splits found during your holding periods
+                    </div>
+                  );
+                }
+                
+                return (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                          <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
+                          <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Holding Period</th>
+                          <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Status</th>
+                          <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Splits Found</th>
+                          <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {symbolsToShow.map(item => {
+                          const symbolSplits = stockSplits.filter(s => s.symbol === item.symbol);
+                          const hasSplits = symbolSplits.length > 0;
+                          const wasChecked = checkedSplitSymbols.has(item.symbol);
+                          
+                          return (
+                            <tr key={item.symbol} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
+                              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>
+                                {item.symbol}
+                              </td>
+                              <td style={{ padding: '10px 12px', fontSize: '13px', color: '#94a3b8' }}>
+                                {item.firstBuy.toLocaleDateString()} → {item.isOpen ? 'Present' : item.lastActivity.toLocaleDateString()}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                {item.isOpen ? (
+                                  <span style={{ padding: '3px 8px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '6px', fontSize: '11px', fontWeight: '500' }}>
+                                    OPEN
+                                  </span>
+                                ) : (
+                                  <span style={{ padding: '3px 8px', background: 'rgba(100, 116, 139, 0.2)', color: '#94a3b8', borderRadius: '6px', fontSize: '11px', fontWeight: '500' }}>
+                                    CLOSED
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                {hasSplits ? (
+                                  <span style={{ 
+                                    padding: '4px 10px', 
+                                    background: 'rgba(16, 185, 129, 0.2)', 
+                                    color: '#34d399', 
+                                    borderRadius: '12px', 
+                                    fontSize: '12px',
+                                    fontWeight: '500'
+                                  }}>
+                                    {symbolSplits.length} split{symbolSplits.length > 1 ? 's' : ''}
+                                  </span>
+                                ) : wasChecked ? (
+                                  <span style={{ color: '#64748b', fontSize: '12px' }}>None</span>
+                                ) : (
+                                  <span style={{ color: '#64748b', fontSize: '12px' }}>—</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                                <button
+                                  onClick={async () => {
+                                    const dateRange = { start: item.firstBuy, end: item.lastActivity };
+                                    await fetchStockSplits(item.symbol, true, dateRange);
+                                    setCheckedSplitSymbols(prev => new Set([...prev, item.symbol]));
+                                  }}
+                                  disabled={fetchingSplits}
+                                  style={{
+                                    padding: '4px 12px',
+                                    background: 'transparent',
+                                    color: '#10b981',
+                                    border: '1px solid rgba(16, 185, 129, 0.5)',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    cursor: fetchingSplits ? 'not-allowed' : 'pointer'
+                                  }}
+                                >
+                                  {hasSplits ? 'Refresh' : 'Fetch'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -1878,7 +1981,7 @@ const TaxLossHarvester = () => {
                 {stockSplits
                   .sort((a, b) => new Date(b.date) - new Date(a.date))
                   .map((split, index) => (
-                  <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
+                  <div key={`${split.symbol}-${split.date}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                       <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
                       <span style={{ color: '#94a3b8', fontSize: '14px' }}>{new Date(split.date).toLocaleDateString()}</span>
@@ -1890,11 +1993,11 @@ const TaxLossHarvester = () => {
                         fontSize: '13px',
                         fontWeight: '500'
                       }}>
-                        {split.ratio}:1
+                        {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
                       </span>
                     </div>
                     <button
-                      onClick={() => removeSplit(index)}
+                      onClick={() => removeSplit(stockSplits.findIndex(s => s.symbol === split.symbol && s.date === split.date))}
                       style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
                     >
                       Remove
@@ -1905,7 +2008,7 @@ const TaxLossHarvester = () => {
             </div>
           )}
           
-          {stockSplits.length === 0 && !showSplitForm && allPositionDetails.filter(p => !isOptionSymbol(p.symbol)).length === 0 && (
+          {stockSplits.length === 0 && !showSplitForm && allTradedSymbols.length === 0 && (
             <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured</p>
           )}
         </div>
