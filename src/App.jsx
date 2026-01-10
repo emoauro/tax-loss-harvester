@@ -531,14 +531,11 @@ const TaxLossHarvester = () => {
   // Fetch previous day's closing price from Yahoo Finance
   const fetchStockPrice = async (symbol) => {
     try {
-      // For options, we can't fetch prices easily - skip them
       if (isOptionSymbol(symbol)) {
         throw new Error('Options prices not available via API');
       }
       
-      const response = await fetch(
-        `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=5d`
-      );
+      const response = await fetch(`/api/yahoo?symbol=${encodeURIComponent(symbol)}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -546,11 +543,11 @@ const TaxLossHarvester = () => {
       
       const data = await response.json();
       
-      if (data.chart.error) {
+      if (data.chart?.error) {
         throw new Error(data.chart.error.description || 'Unknown error');
       }
       
-      const result = data.chart.result?.[0];
+      const result = data.chart?.result?.[0];
       if (!result) {
         throw new Error('No data returned');
       }
@@ -622,16 +619,14 @@ const TaxLossHarvester = () => {
   };
 
   // Fetch stock splits from Yahoo Finance
-  const fetchStockSplits = async (symbol) => {
+ const fetchStockSplits = async (symbol) => {
     if (!symbol) return;
     
     setFetchingSplits(true);
     const upperSymbol = symbol.toUpperCase();
     
     try {
-      const response = await fetch(
-        `https://query1.finance.yahoo.com/v8/finance/chart/${upperSymbol}?interval=1d&range=max&events=splits`
-      );
+      const response = await fetch(`/api/yahoo?symbol=${encodeURIComponent(upperSymbol)}&type=splits`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -639,11 +634,11 @@ const TaxLossHarvester = () => {
       
       const data = await response.json();
       
-      if (data.chart.error) {
+      if (data.chart?.error) {
         throw new Error(data.chart.error.description || 'Unknown error');
       }
       
-      const result = data.chart.result?.[0];
+      const result = data.chart?.result?.[0];
       const splits = result?.events?.splits;
       
       if (!splits || Object.keys(splits).length === 0) {
