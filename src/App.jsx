@@ -650,7 +650,7 @@ const TaxLossHarvester = () => {
       const newSplits = Object.entries(splits).map(([timestamp, splitData]) => ({
         symbol: upperSymbol,
         date: new Date(parseInt(timestamp) * 1000).toISOString().split('T')[0],
-        ratio: splitData.splitRatio,
+        ratio: splitData.numerator / splitData.denominator,
         numerator: splitData.numerator,
         denominator: splitData.denominator
       }));
