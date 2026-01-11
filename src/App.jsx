@@ -1452,8 +1452,26 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
     };
   }, [transactions, currentPrices, stockSplits, tickerChanges, currentDate]);
 
+  const { 
+    positions, 
+    optionsPositions,
+    closedPositions, 
+    closedOptionsPositions,
+    stGains, 
+    ltGains, 
+    stockStGains,
+    stockLtGains,
+    optionsStGains,
+    optionsLtGains,
+    allYears, 
+    allPositionDetails,
+    allOptionsDetails,
+    washSales,
+    totalWashSaleDisallowed
+  } = processedData;
+
 // Get all traded symbols (open + closed) with their holding periods
-  const allTradedSymbols = useMemo(() => {
+const allTradedSymbols = useMemo(() => {
     const symbolData = {};
     
     // Process all transactions to find first buy and last sell for each symbol
@@ -1502,25 +1520,6 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [transactions, allPositionDetails, currentDate]);
-
-  const { 
-    positions, 
-    optionsPositions,
-    closedPositions, 
-    closedOptionsPositions,
-    stGains, 
-    ltGains, 
-    stockStGains,
-    stockLtGains,
-    optionsStGains,
-    optionsLtGains,
-    allYears, 
-    allPositionDetails,
-    allOptionsDetails,
-    washSales,
-    totalWashSaleDisallowed
-  } = processedData;
-
   // ============================================
   // RENDER FUNCTIONS
   // ============================================
