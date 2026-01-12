@@ -417,6 +417,10 @@ const TaxLossHarvester = () => {
   const [lastPriceFetch, setLastPriceFetch] = useState(null);
   const [checkedSplitSymbols, setCheckedSplitSymbols] = useState(new Set());
   const [editingSplitIndex, setEditingSplitIndex] = useState(null);
+  const [alphaVantageKey, setAlphaVantageKey] = useState(() => {
+    return localStorage.getItem('tlh_alphavantage_key') || '';
+  });
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   // Save to localStorage whenever data changes
   useEffect(() => {
@@ -438,6 +442,11 @@ const TaxLossHarvester = () => {
   useEffect(() => {
     localStorage.setItem('tlh_tickerChanges', JSON.stringify(tickerChanges));
   }, [tickerChanges]);
+  useEffect(() => {
+    if (alphaVantageKey) {
+      localStorage.setItem('tlh_alphavantage_key', alphaVantageKey);
+    }
+  }, [alphaVantageKey]);
 
   // ============================================
   // OPTIONS PARSING UTILITIES
@@ -622,13 +631,21 @@ const TaxLossHarvester = () => {
 
   // Fetch stock splits from Yahoo Finance
 const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => {
-    if (!symbol) return;
+    if (!symbol) return { found: 0, added: 0 };
     
-    setFetchingSplits(true);
     const upperSymbol = symbol.toUpperCase();
     
+    // Check for API key
+    if (!alphaVantageKey) {
+      if (showAlerts) {
+        alert('Please set your Alpha Vantage API key first. Get a free key at alphavantage.co');
+        setShowApiKeyInput(true);
+      }
+      return { found: 0, added: 0, error: 'No API key' };
+    }
+    
     try {
-      const response = await fetch(`/api/yahoo?symbol=${encodeURIComponent(upperSymbol)}&type=splits`);
+      const response = await fetch(`/api/yahoo?symbol=${encodeURIComponent(upperSymbol)}&type=splits&apikey=${encodeURIComponent(alphaVantageKey)}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -636,25 +653,24 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       
       const data = await response.json();
       
-      if (data.chart?.error) {
-        throw new Error(data.chart.error.description || 'Unknown error');
+      if (data.error) {
+        throw new Error(data.error);
       }
       
-      const result = data.chart?.result?.[0];
-      const splits = result?.events?.splits;
+      const splits = data.splits || [];
       
-      if (!splits || Object.keys(splits).length === 0) {
-        setFetchingSplits(false);
+      if (splits.length === 0) {
         return { found: 0, added: 0 };
       }
       
-      let newSplits = Object.entries(splits).map(([timestamp, splitData]) => ({
+      // Transform and filter splits
+      let newSplits = splits.map(s => ({
         symbol: upperSymbol,
-        date: new Date(parseInt(timestamp) * 1000).toISOString().split('T')[0],
-        ratio: splitData.numerator / splitData.denominator,
-        numerator: splitData.numerator,
-        denominator: splitData.denominator,
-        dateObj: new Date(parseInt(timestamp) * 1000)
+        date: s.date,
+        ratio: s.ratio,
+        splitFrom: s.splitFrom,
+        splitTo: s.splitTo,
+        dateObj: new Date(s.date)
       }));
       
       // Filter by date range if provided (only splits during holding period)
@@ -684,13 +700,11 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       }
       
       setSplitFetchSymbol('');
-      setFetchingSplits(false);
       return { found: newSplits.length, added: splitsToAdd.length };
     } catch (error) {
       if (showAlerts) {
         alert(`Error fetching splits for ${upperSymbol}: ${error.message}`);
       }
-      setFetchingSplits(false);
       return { found: 0, added: 0, error: error.message };
     }
   };
@@ -1783,6 +1797,74 @@ const allTradedSymbols = useMemo(() => {
             >
               {showSplitForm ? 'Cancel' : '+ Add Manually'}
             </button>
+          </div>
+
+          {/* Alpha Vantage API Key Input */}
+          <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontWeight: '600', color: '#60a5fa' }}>Alpha Vantage API</span>
+                {alphaVantageKey ? (
+                  <span style={{ padding: '4px 10px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
+                    ✓ Key Set
+                  </span>
+                ) : (
+                  <span style={{ padding: '4px 10px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
+                    Key Required
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                style={{
+                  padding: '6px 12px',
+                  background: 'transparent',
+                  color: '#60a5fa',
+                  border: '1px solid rgba(59, 130, 246, 0.5)',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  cursor: 'pointer'
+                }}
+              >
+                {showApiKeyInput ? 'Hide' : alphaVantageKey ? 'Change Key' : 'Set Key'}
+              </button>
+            </div>
+            
+            {showApiKeyInput && (
+              <div style={{ marginTop: '12px' }}>
+                <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>
+                  Get a free API key at <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>alphavantage.co</a> (25 requests/day)
+                </p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Enter your API key"
+                    defaultValue={alphaVantageKey}
+                    style={{ 
+                      flex: 1,
+                      padding: '8px 12px', 
+                      background: '#334155', 
+                      border: '1px solid #475569', 
+                      borderRadius: '8px', 
+                      color: '#f1f5f9', 
+                      outline: 'none',
+                      fontFamily: 'monospace'
+                    }}
+                    id="alpha-vantage-key-input"
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.getElementById('alpha-vantage-key-input');
+                      setAlphaVantageKey(input.value.trim());
+                      setShowApiKeyInput(false);
+                    }}
+                    style={{ padding: '8px 16px', background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '500', cursor: 'pointer' }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {showSplitForm && (
