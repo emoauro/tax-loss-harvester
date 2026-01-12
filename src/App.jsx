@@ -417,6 +417,12 @@ const TaxLossHarvester = () => {
   const [lastPriceFetch, setLastPriceFetch] = useState(null);
   const [checkedSplitSymbols, setCheckedSplitSymbols] = useState(new Set());
   const [editingSplitIndex, setEditingSplitIndex] = useState(null);
+  const [verifiedSplits, setVerifiedSplits] = useState(() => {
+    const saved = localStorage.getItem('tlh_verifiedSplits');
+    return saved ? new Set(JSON.parse(saved)) : new Set();
+  });
+  const [showFetchedSplitsTable, setShowFetchedSplitsTable] = useState(false);
+  const [lastFetchedSplits, setLastFetchedSplits] = useState([]);
 
   // Save to localStorage whenever data changes
   useEffect(() => {
@@ -438,6 +444,9 @@ const TaxLossHarvester = () => {
   useEffect(() => {
     localStorage.setItem('tlh_tickerChanges', JSON.stringify(tickerChanges));
   }, [tickerChanges]);
+  useEffect(() => {
+    localStorage.setItem('tlh_verifiedSplits', JSON.stringify([...verifiedSplits]));
+  }, [verifiedSplits]);
 
   // ============================================
   // OPTIONS PARSING UTILITIES
@@ -848,6 +857,22 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       i === index ? { ...split, date: newDate } : split
     ));
     setEditingSplitIndex(null);
+  };
+  const getSplitKey = (split) => `${split.symbol}-${split.date}`;
+  
+  const markSplitVerified = (split) => {
+    setVerifiedSplits(prev => new Set([...prev, getSplitKey(split)]));
+  };
+  
+  const isSplitVerified = (split) => {
+    return verifiedSplits.has(getSplitKey(split));
+  };
+  
+  const openVerifySearch = (split) => {
+    const date = new Date(split.date);
+    const monthYear = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    const query = encodeURIComponent(`${split.symbol} stock split ${monthYear}`);
+    window.open(`https://www.google.com/search?q=${query}`, '_blank');
   };
 
   const addTickerChange = () => {
@@ -1764,61 +1789,66 @@ const allTradedSymbols = useMemo(() => {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <div>
               <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Stock Splits</h3>
-              <p style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>Fetches splits that occurred during your holding period for each ticker</p>
+              <p style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>Adjust historical positions for stock splits</p>
             </div>
-            <button
-              onClick={() => setShowSplitForm(!showSplitForm)}
-              style={{
-                padding: '8px 16px',
-                background: '#2563eb',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                fontWeight: '500',
-                cursor: 'pointer'
-              }}
-            >
-              {showSplitForm ? 'Cancel' : '+ Add Manually'}
-            </button>
-          </div>
-            
-            {showApiKeyInput && (
-              <div style={{ marginTop: '12px' }}>
-                <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '8px' }}>
-                  Get a free API key at <a href="https://www.alphavantage.co/support/#api-key" target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa' }}>alphavantage.co</a> (25 requests/day)
-                </p>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    placeholder="Enter your API key"
-                    defaultValue={alphaVantageKey}
-                    style={{ 
-                      flex: 1,
-                      padding: '8px 12px', 
-                      background: '#334155', 
-                      border: '1px solid #475569', 
-                      borderRadius: '8px', 
-                      color: '#f1f5f9', 
-                      outline: 'none',
-                      fontFamily: 'monospace'
-                    }}
-                    id="alpha-vantage-key-input"
-                  />
-                  <button
-                    onClick={() => {
-                      const input = document.getElementById('alpha-vantage-key-input');
-                      setAlphaVantageKey(input.value.trim());
-                      setShowApiKeyInput(false);
-                    }}
-                    style={{ padding: '8px 16px', background: '#10b981', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '500', cursor: 'pointer' }}
-                  >
-                    Save
-                  </button>
-                </div>
-              </div>
-            )}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {allTradedSymbols.length > 0 && (
+                <button
+                  onClick={async () => {
+                    setFetchingSplits(true);
+                    setLastFetchedSplits([]);
+                    setShowFetchedSplitsTable(true);
+                    const newChecked = new Set();
+                    
+                    for (const item of allTradedSymbols) {
+                      const dateRange = {
+                        start: item.firstBuy,
+                        end: item.lastActivity
+                      };
+                      await fetchStockSplits(item.symbol, false, dateRange);
+                      newChecked.add(item.symbol);
+                      await new Promise(resolve => setTimeout(resolve, 300));
+                    }
+                    
+                    setCheckedSplitSymbols(newChecked);
+                    setFetchingSplits(false);
+                  }}
+                  disabled={fetchingSplits}
+                  style={{
+                    padding: '8px 16px',
+                    background: fetchingSplits ? '#475569' : '#10b981',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: '500',
+                    cursor: fetchingSplits ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
+                  {fetchingSplits ? 'Fetching...' : `Fetch Splits (${allTradedSymbols.length} symbols)`}
+                </button>
+              )}
+              <button
+                onClick={() => setShowSplitForm(!showSplitForm)}
+                style={{
+                  padding: '8px 16px',
+                  background: '#2563eb',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontWeight: '500',
+                  cursor: 'pointer'
+                }}
+              >
+                {showSplitForm ? 'Cancel' : '+ Add Manually'}
+              </button>
+            </div>
           </div>
 
+          {/* Manual Add Form */}
           {showSplitForm && (
             <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
               <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '12px' }}>Add split manually:</p>
@@ -1865,152 +1895,134 @@ const allTradedSymbols = useMemo(() => {
             </div>
           )}
 
-          {/* Fetch All Splits Table */}
-          {allTradedSymbols.length > 0 && (
+          {/* Fetched Splits Results (dismissable) */}
+          {showFetchedSplitsTable && lastFetchedSplits.length > 0 && (
             <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                 <div>
-                  <span style={{ fontWeight: '600', color: '#10b981' }}>All Traded Symbols</span>
+                  <span style={{ fontWeight: '600', color: '#10b981' }}>Fetched Splits</span>
                   <span style={{ marginLeft: '12px', fontSize: '14px', color: '#94a3b8' }}>
-                    {allTradedSymbols.length} symbols · {[...new Set(stockSplits.map(s => s.symbol))].length} with splits
+                    {lastFetchedSplits.length} split{lastFetchedSplits.length !== 1 ? 's' : ''} found during your holding periods
                   </span>
                 </div>
                 <button
-                  onClick={async () => {
-                    setFetchingSplits(true);
-                    const newChecked = new Set();
-                    
-                    for (const item of allTradedSymbols) {
-                      const dateRange = {
-                        start: item.firstBuy,
-                        end: item.lastActivity
-                      };
-                      await fetchStockSplits(item.symbol, false, dateRange);
-                      newChecked.add(item.symbol);
-                      await new Promise(resolve => setTimeout(resolve, 300));
-                    }
-                    
-                    setCheckedSplitSymbols(newChecked);
-                    setFetchingSplits(false);
-                  }}
-                  disabled={fetchingSplits}
+                  onClick={() => setShowFetchedSplitsTable(false)}
                   style={{
-                    padding: '8px 16px',
-                    background: fetchingSplits ? '#475569' : '#10b981',
-                    color: 'white',
+                    background: 'transparent',
                     border: 'none',
-                    borderRadius: '8px',
-                    fontWeight: '500',
-                    cursor: fetchingSplits ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '4px 8px',
+                    fontSize: '18px',
+                    lineHeight: '1'
                   }}
                 >
-                  {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
-                  {fetchingSplits ? 'Fetching...' : 'Fetch All Splits'}
+                  ×
                 </button>
               </div>
-              
-              {/* Show table: before fetch = all symbols, after fetch = only those with splits */}
-              {(() => {
-                const symbolsToShow = checkedSplitSymbols.size > 0
-                  ? allTradedSymbols.filter(item => stockSplits.some(s => s.symbol === item.symbol))
-                  : allTradedSymbols;
-                
-                if (checkedSplitSymbols.size > 0 && symbolsToShow.length === 0) {
-                  return (
-                    <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8' }}>
-                      <span style={{ fontSize: '24px', marginRight: '8px' }}>✓</span>
-                      No stock splits found during your holding periods
-                    </div>
-                  );
-                }
-                
-                return (
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                      <thead>
-                        <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                          <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
-                          <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Holding Period</th>
-                          <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Status</th>
-                          <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Splits Found</th>
-                          <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {symbolsToShow.map(item => {
-                          const symbolSplits = stockSplits.filter(s => s.symbol === item.symbol);
-                          const hasSplits = symbolSplits.length > 0;
-                          const wasChecked = checkedSplitSymbols.has(item.symbol);
-                          
-                          return (
-                            <tr key={item.symbol} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
-                              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>
-                                {item.symbol}
-                              </td>
-                              <td style={{ padding: '10px 12px', fontSize: '13px', color: '#94a3b8' }}>
-                                {item.firstBuy.toLocaleDateString()} → {item.isOpen ? 'Present' : item.lastActivity.toLocaleDateString()}
-                              </td>
-                              <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                                {item.isOpen ? (
-                                  <span style={{ padding: '3px 8px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '6px', fontSize: '11px', fontWeight: '500' }}>
-                                    OPEN
-                                  </span>
-                                ) : (
-                                  <span style={{ padding: '3px 8px', background: 'rgba(100, 116, 139, 0.2)', color: '#94a3b8', borderRadius: '6px', fontSize: '11px', fontWeight: '500' }}>
-                                    CLOSED
-                                  </span>
-                                )}
-                              </td>
-                              <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                                {hasSplits ? (
-                                  <span style={{ 
-                                    padding: '4px 10px', 
-                                    background: 'rgba(16, 185, 129, 0.2)', 
-                                    color: '#34d399', 
-                                    borderRadius: '12px', 
-                                    fontSize: '12px',
-                                    fontWeight: '500'
-                                  }}>
-                                    {symbolSplits.length} split{symbolSplits.length > 1 ? 's' : ''}
-                                  </span>
-                                ) : wasChecked ? (
-                                  <span style={{ color: '#64748b', fontSize: '12px' }}>None</span>
-                                ) : (
-                                  <span style={{ color: '#64748b', fontSize: '12px' }}>—</span>
-                                )}
-                              </td>
-                              <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Date</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Ratio</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Status</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lastFetchedSplits.map((split, index) => {
+                      const verified = isSplitVerified(split);
+                      return (
+                        <tr key={`${split.symbol}-${split.date}-${index}`} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
+                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>{split.symbol}</td>
+                          <td style={{ padding: '10px 12px', fontSize: '14px', color: '#94a3b8' }}>{new Date(split.date).toLocaleDateString()}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                            <span style={{ padding: '4px 10px', background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', borderRadius: '6px', fontSize: '13px', fontWeight: '500' }}>
+                              {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                            {verified ? (
+                              <span style={{ padding: '4px 10px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
+                                ✓ Verified
+                              </span>
+                            ) : (
+                              <span style={{ padding: '4px 10px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
+                                ⚠ Unverified
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                              <button
+                                onClick={() => openVerifySearch(split)}
+                                style={{
+                                  padding: '4px 10px',
+                                  background: 'transparent',
+                                  color: '#60a5fa',
+                                  border: '1px solid rgba(59, 130, 246, 0.5)',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                              >
+                                Verify 🔗
+                              </button>
+                              {!verified && (
                                 <button
-                                  onClick={async () => {
-                                    const dateRange = { start: item.firstBuy, end: item.lastActivity };
-                                    await fetchStockSplits(item.symbol, true, dateRange);
-                                    setCheckedSplitSymbols(prev => new Set([...prev, item.symbol]));
-                                  }}
-                                  disabled={fetchingSplits}
+                                  onClick={() => markSplitVerified(split)}
                                   style={{
-                                    padding: '4px 12px',
-                                    background: 'transparent',
-                                    color: '#10b981',
+                                    padding: '4px 10px',
+                                    background: 'rgba(16, 185, 129, 0.2)',
+                                    color: '#34d399',
                                     border: '1px solid rgba(16, 185, 129, 0.5)',
                                     borderRadius: '6px',
                                     fontSize: '12px',
-                                    cursor: fetchingSplits ? 'not-allowed' : 'pointer'
+                                    cursor: 'pointer'
                                   }}
                                 >
-                                  {hasSplits ? 'Refresh' : 'Fetch'}
+                                  ✓ OK
                                 </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* No splits found message */}
+          {showFetchedSplitsTable && lastFetchedSplits.length === 0 && !fetchingSplits && (
+            <div style={{ marginBottom: '16px', padding: '20px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px', textAlign: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: '24px', marginRight: '8px' }}>✓</span>
+                  <span style={{ color: '#94a3b8' }}>No stock splits found during your holding periods</span>
+                </div>
+                <button
+                  onClick={() => setShowFetchedSplitsTable(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: '4px 8px',
+                    fontSize: '18px',
+                    lineHeight: '1'
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             </div>
           )}
 
@@ -2033,7 +2045,7 @@ const allTradedSymbols = useMemo(() => {
                   <div style={{ fontWeight: '600', color: '#fb923c', marginBottom: '4px' }}>Verify Split Dates</div>
                   <div style={{ fontSize: '13px', color: '#94a3b8' }}>
                     Fetched dates may be off by a few days due to data source inconsistencies. 
-                    Click the date to edit if needed. Incorrect dates can cause position calculation errors.
+                    Click the date to edit, or use "Verify" to check online. Incorrect dates can cause position calculation errors.
                   </div>
                 </div>
               </div>
@@ -2043,103 +2055,150 @@ const allTradedSymbols = useMemo(() => {
                 {stockSplits
                   .map((split, originalIndex) => ({ split, originalIndex }))
                   .sort((a, b) => new Date(b.split.date) - new Date(a.split.date))
-                  .map(({ split, originalIndex }) => (
-                  <div key={`${split.symbol}-${split.date}-${originalIndex}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                      <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
-                      
-                      {/* Editable date */}
-                      {editingSplitIndex === originalIndex ? (
+                  .map(({ split, originalIndex }) => {
+                    const verified = isSplitVerified(split);
+                    return (
+                      <div key={`${split.symbol}-${split.date}-${originalIndex}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                          <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
+                          
+                          {/* Editable date */}
+                          {editingSplitIndex === originalIndex ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <input
+                                type="date"
+                                defaultValue={split.date}
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    updateSplitDate(originalIndex, e.target.value);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingSplitIndex(null);
+                                  }
+                                }}
+                                style={{ 
+                                  padding: '4px 8px', 
+                                  background: '#334155', 
+                                  border: '1px solid #3b82f6', 
+                                  borderRadius: '6px', 
+                                  color: '#f1f5f9', 
+                                  outline: 'none',
+                                  fontSize: '14px'
+                                }}
+                                id={`split-date-${originalIndex}`}
+                              />
+                              <button
+                                onClick={() => {
+                                  const input = document.getElementById(`split-date-${originalIndex}`);
+                                  updateSplitDate(originalIndex, input.value);
+                                }}
+                                style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingSplitIndex(null)}
+                                style={{ padding: '4px 8px', background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '12px' }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <span 
+                              onClick={() => setEditingSplitIndex(originalIndex)}
+                              style={{ 
+                                color: '#94a3b8', 
+                                fontSize: '14px', 
+                                cursor: 'pointer',
+                                padding: '4px 8px',
+                                borderRadius: '4px',
+                                border: '1px dashed transparent',
+                                transition: 'all 0.2s'
+                              }}
+                              onMouseOver={(e) => {
+                                e.currentTarget.style.borderColor = '#475569';
+                                e.currentTarget.style.background = 'rgba(51, 65, 85, 0.3)';
+                              }}
+                              onMouseOut={(e) => {
+                                e.currentTarget.style.borderColor = 'transparent';
+                                e.currentTarget.style.background = 'transparent';
+                              }}
+                              title="Click to edit date"
+                            >
+                              {new Date(split.date).toLocaleDateString()}
+                            </span>
+                          )}
+                          
+                          <span style={{ 
+                            padding: '4px 10px', 
+                            background: 'rgba(59, 130, 246, 0.2)', 
+                            color: '#60a5fa', 
+                            borderRadius: '6px', 
+                            fontSize: '13px',
+                            fontWeight: '500'
+                          }}>
+                            {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
+                          </span>
+                          
+                          {/* Verification status */}
+                          {verified ? (
+                            <span style={{ padding: '4px 8px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '4px', fontSize: '11px', fontWeight: '500' }}>
+                              ✓ Verified
+                            </span>
+                          ) : (
+                            <span style={{ padding: '4px 8px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '4px', fontSize: '11px', fontWeight: '500' }}>
+                              ⚠ Unverified
+                            </span>
+                          )}
+                        </div>
+                        
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <input
-                            type="date"
-                            defaultValue={split.date}
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                updateSplitDate(originalIndex, e.target.value);
-                              } else if (e.key === 'Escape') {
-                                setEditingSplitIndex(null);
-                              }
-                            }}
-                            style={{ 
-                              padding: '4px 8px', 
-                              background: '#334155', 
-                              border: '1px solid #3b82f6', 
-                              borderRadius: '6px', 
-                              color: '#f1f5f9', 
-                              outline: 'none',
-                              fontSize: '14px'
-                            }}
-                            id={`split-date-${originalIndex}`}
-                          />
                           <button
-                            onClick={() => {
-                              const input = document.getElementById(`split-date-${originalIndex}`);
-                              updateSplitDate(originalIndex, input.value);
+                            onClick={() => openVerifySearch(split)}
+                            style={{
+                              padding: '4px 10px',
+                              background: 'transparent',
+                              color: '#60a5fa',
+                              border: '1px solid rgba(59, 130, 246, 0.5)',
+                              borderRadius: '6px',
+                              fontSize: '12px',
+                              cursor: 'pointer'
                             }}
-                            style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
                           >
-                            Save
+                            Verify 🔗
                           </button>
+                          {!verified && (
+                            <button
+                              onClick={() => markSplitVerified(split)}
+                              style={{
+                                padding: '4px 10px',
+                                background: 'rgba(16, 185, 129, 0.2)',
+                                color: '#34d399',
+                                border: '1px solid rgba(16, 185, 129, 0.5)',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              ✓ OK
+                            </button>
+                          )}
                           <button
-                            onClick={() => setEditingSplitIndex(null)}
-                            style={{ padding: '4px 8px', background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '12px' }}
+                            onClick={() => removeSplit(originalIndex)}
+                            style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
                           >
-                            Cancel
+                            Remove
                           </button>
                         </div>
-                      ) : (
-                        <span 
-                          onClick={() => setEditingSplitIndex(originalIndex)}
-                          style={{ 
-                            color: '#94a3b8', 
-                            fontSize: '14px', 
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            borderRadius: '4px',
-                            border: '1px dashed transparent',
-                            transition: 'all 0.2s'
-                          }}
-                          onMouseOver={(e) => {
-                            e.currentTarget.style.borderColor = '#475569';
-                            e.currentTarget.style.background = 'rgba(51, 65, 85, 0.3)';
-                          }}
-                          onMouseOut={(e) => {
-                            e.currentTarget.style.borderColor = 'transparent';
-                            e.currentTarget.style.background = 'transparent';
-                          }}
-                          title="Click to edit date"
-                        >
-                          {new Date(split.date).toLocaleDateString()}
-                        </span>
-                      )}
-                      
-                      <span style={{ 
-                        padding: '4px 10px', 
-                        background: 'rgba(59, 130, 246, 0.2)', 
-                        color: '#60a5fa', 
-                        borderRadius: '6px', 
-                        fontSize: '13px',
-                        fontWeight: '500'
-                      }}>
-                        {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => removeSplit(originalIndex)}
-                      style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                      </div>
+                    );
+                  })}
               </div>
             </div>
           )}
           
-          {stockSplits.length === 0 && !showSplitForm && allTradedSymbols.length === 0 && (
-            <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured</p>
+          {stockSplits.length === 0 && !showSplitForm && !showFetchedSplitsTable && (
+            <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured. Use "Fetch Splits" or add manually.</p>
           )}
         </div>
 
