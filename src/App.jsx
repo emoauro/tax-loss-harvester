@@ -421,8 +421,6 @@ const TaxLossHarvester = () => {
     const saved = localStorage.getItem('tlh_verifiedSplits');
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
-  const [showFetchedSplitsTable, setShowFetchedSplitsTable] = useState(false);
-  const [lastFetchedSplits, setLastFetchedSplits] = useState([]);
 
   // Save to localStorage whenever data changes
   useEffect(() => {
@@ -685,7 +683,6 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       
       if (splitsToAdd.length > 0) {
         setStockSplits(prev => [...prev, ...splitsToAdd]);
-        setLastFetchedSplits(prev => [...prev, ...splitsToAdd]);
         if (showAlerts) {
           alert(`Added ${splitsToAdd.length} split(s) for ${upperSymbol}`);
         }
@@ -1499,31 +1496,49 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
     washSales,
     totalWashSaleDisallowed
   } = processedData;
+  // Reset selected symbol if it no longer exists in positions
+  useEffect(() => {
+    if (selectedSymbol && allPositionDetails.length > 0) {
+      const stillExists = allPositionDetails.some(p => p.symbol === selectedSymbol);
+      if (!stillExists) {
+        setSelectedSymbol(null);
+      }
+    }
+  }, [selectedSymbol, allPositionDetails]);
 
 // Get all traded symbols (open + closed) with their holding periods
-const allTradedSymbols = useMemo(() => {
+// Get symbols that need split checking:
+  // 1. Currently open positions
+  // 2. Positions where sold > bought (indicates split happened but wasn't recorded)
+  const allTradedSymbols = useMemo(() => {
     const symbolData = {};
     
-    // Process all transactions to find first buy and last sell for each symbol
+    // Process all transactions to calculate bought/sold per symbol
     transactions.forEach(t => {
       const symbol = t.Symbol;
       if (!symbol || isOptionSymbol(symbol)) return;
       
       const date = new Date(t.Date);
       const type = (t['Transaction Type'] || '').toUpperCase();
+      const units = parseFloat(t.Units) || 0;
       
       if (!symbolData[symbol]) {
         symbolData[symbol] = { 
           firstBuy: null, 
           lastActivity: null,
-          isOpen: false 
+          isOpen: false,
+          totalBought: 0,
+          totalSold: 0
         };
       }
       
       if (['PURCHASED', 'BUY', 'BOUGHT'].includes(type)) {
+        symbolData[symbol].totalBought += units;
         if (!symbolData[symbol].firstBuy || date < symbolData[symbol].firstBuy) {
           symbolData[symbol].firstBuy = date;
         }
+      } else if (['SOLD', 'SELL'].includes(type)) {
+        symbolData[symbol].totalSold += units;
       }
       
       // Track last activity date (buy or sell)
@@ -1532,7 +1547,7 @@ const allTradedSymbols = useMemo(() => {
       }
     });
     
-    // Mark which symbols are still open
+    // Mark which symbols are still open based on processedData
     allPositionDetails.forEach(p => {
       if (symbolData[p.symbol]) {
         symbolData[p.symbol].isOpen = true;
@@ -1540,13 +1555,29 @@ const allTradedSymbols = useMemo(() => {
       }
     });
     
+    // Only include symbols that:
+    // 1. Have current open positions, OR
+    // 2. Have sold more than bought (clear split indicator)
     return Object.entries(symbolData)
-      .filter(([_, data]) => data.firstBuy) // Must have at least one purchase
+      .filter(([_, data]) => {
+        if (!data.firstBuy) return false; // Must have at least one purchase
+        
+        // Include if currently open
+        if (data.isOpen) return true;
+        
+        // Include if sold > bought (indicates unrecorded split)
+        if (data.totalSold > data.totalBought * 1.01) return true; // 1% tolerance for rounding
+        
+        return false;
+      })
       .map(([symbol, data]) => ({
         symbol,
         firstBuy: data.firstBuy,
         lastActivity: data.lastActivity,
-        isOpen: data.isOpen
+        isOpen: data.isOpen,
+        totalBought: data.totalBought,
+        totalSold: data.totalSold,
+        needsSplit: data.totalSold > data.totalBought * 1.01
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [transactions, allPositionDetails, currentDate]);
@@ -1828,7 +1859,7 @@ const allTradedSymbols = useMemo(() => {
                   }}
                 >
                   {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
-                  {fetchingSplits ? 'Fetching...' : `Fetch Splits (${allTradedSymbols.length} symbols)`}
+                  {fetchingSplits ? 'Fetching...' : `Fetch Splits (${allTradedSymbols.length} open positions)`}
                 </button>
               )}
               <button
@@ -1891,137 +1922,6 @@ const allTradedSymbols = useMemo(() => {
                     Add
                   </button>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* Fetched Splits Results (dismissable) */}
-          {showFetchedSplitsTable && lastFetchedSplits.length > 0 && (
-            <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <div>
-                  <span style={{ fontWeight: '600', color: '#10b981' }}>Fetched Splits</span>
-                  <span style={{ marginLeft: '12px', fontSize: '14px', color: '#94a3b8' }}>
-                    {lastFetchedSplits.length} split{lastFetchedSplits.length !== 1 ? 's' : ''} found during your holding periods
-                  </span>
-                </div>
-                <button
-                  onClick={() => setShowFetchedSplitsTable(false)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#94a3b8',
-                    cursor: 'pointer',
-                    padding: '4px 8px',
-                    fontSize: '18px',
-                    lineHeight: '1'
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
-                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Date</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Ratio</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Status</th>
-                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {lastFetchedSplits.map((split, index) => {
-                      const verified = isSplitVerified(split);
-                      return (
-                        <tr key={`${split.symbol}-${split.date}-${index}`} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
-                          <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>{split.symbol}</td>
-                          <td style={{ padding: '10px 12px', fontSize: '14px', color: '#94a3b8' }}>{new Date(split.date).toLocaleDateString()}</td>
-                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                            <span style={{ padding: '4px 10px', background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', borderRadius: '6px', fontSize: '13px', fontWeight: '500' }}>
-                              {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
-                            </span>
-                          </td>
-                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                            {verified ? (
-                              <span style={{ padding: '4px 10px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
-                                ✓ Verified
-                              </span>
-                            ) : (
-                              <span style={{ padding: '4px 10px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '6px', fontSize: '12px', fontWeight: '500' }}>
-                                ⚠ Unverified
-                              </span>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                              <button
-                                onClick={() => openVerifySearch(split)}
-                                style={{
-                                  padding: '4px 10px',
-                                  background: 'transparent',
-                                  color: '#60a5fa',
-                                  border: '1px solid rgba(59, 130, 246, 0.5)',
-                                  borderRadius: '6px',
-                                  fontSize: '12px',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}
-                              >
-                                Verify 🔗
-                              </button>
-                              {!verified && (
-                                <button
-                                  onClick={() => markSplitVerified(split)}
-                                  style={{
-                                    padding: '4px 10px',
-                                    background: 'rgba(16, 185, 129, 0.2)',
-                                    color: '#34d399',
-                                    border: '1px solid rgba(16, 185, 129, 0.5)',
-                                    borderRadius: '6px',
-                                    fontSize: '12px',
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  ✓ OK
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* No splits found message */}
-          {showFetchedSplitsTable && lastFetchedSplits.length === 0 && !fetchingSplits && (
-            <div style={{ marginBottom: '16px', padding: '20px', background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '8px', textAlign: 'center' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: '24px', marginRight: '8px' }}>✓</span>
-                  <span style={{ color: '#94a3b8' }}>No stock splits found during your holding periods</span>
-                </div>
-                <button
-                  onClick={() => setShowFetchedSplitsTable(false)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#94a3b8',
-                    cursor: 'pointer',
-                    padding: '4px 8px',
-                    fontSize: '18px',
-                    lineHeight: '1'
-                  }}
-                >
-                  ×
-                </button>
               </div>
             </div>
           )}
@@ -2197,7 +2097,7 @@ const allTradedSymbols = useMemo(() => {
             </div>
           )}
           
-          {stockSplits.length === 0 && !showSplitForm && !showFetchedSplitsTable && (
+          {stockSplits.length === 0 && !showSplitForm && (
             <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured. Use "Fetch Splits" or add manually.</p>
           )}
         </div>
@@ -2575,7 +2475,7 @@ const allTradedSymbols = useMemo(() => {
 
   const renderTaxLots = () => {
     const openPositions = Object.entries(positions)
-      .filter(([symbol, data]) => data.totalUnits > 0.0001)
+      .filter(([symbol, data]) => data && data.totalUnits > 0.0001)
       .map(([symbol, data]) => ({ symbol, ...data }));
 
     const allLots = openPositions.flatMap(p => p.lots);
