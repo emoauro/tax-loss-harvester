@@ -1565,8 +1565,11 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
         // Include if currently open
         if (data.isOpen) return true;
         
-        // Include if sold > bought (indicates unrecorded split)
-        if (data.totalSold > data.totalBought * 1.01) return true; // 1% tolerance for rounding
+        // Include if sold > bought (indicates unrecorded split made position look closed)
+        if (data.totalSold > data.totalBought * 1.01) return true;
+        
+        // Include if bought > sold (should have open position - split might be needed to reconcile)
+        if (data.totalBought > data.totalSold * 1.01) return true;
         
         return false;
       })
