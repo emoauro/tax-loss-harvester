@@ -1827,8 +1827,6 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                 <button
                   onClick={async () => {
                     setFetchingSplits(true);
-                    setLastFetchedSplits([]);
-                    setShowFetchedSplitsTable(true);
                     const newChecked = new Set();
                     
                     for (const item of allTradedSymbols) {
