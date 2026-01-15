@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Upload, TrendingUp, TrendingDown, DollarSign, RefreshCw, AlertCircle, AlertTriangle, Copy, Check, HelpCircle, X, FileText, ChevronDown, ChevronUp } from 'lucide-react';
-
+import { Upload, TrendingUp, TrendingDown, DollarSign, RefreshCw, AlertCircle, AlertTriangle, Copy, Check, HelpCircle, X, FileText, ChevronDown, ChevronUp, Mail, Search } from 'lucide-react';
 // ============================================
 // IMPORT HELPER COMPONENT
 // ============================================
@@ -1584,6 +1583,92 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [transactions, allPositionDetails, currentDate]);
+  // Detect potential split issues based on transaction anomalies
+  const splitSuggestions = useMemo(() => {
+    const suggestions = [];
+    const symbolData = {};
+    
+    // Calculate bought/sold totals per symbol
+    transactions.forEach(t => {
+      const symbol = t.Symbol;
+      if (!symbol || isOptionSymbol(symbol)) return;
+      
+      const type = (t['Transaction Type'] || '').toUpperCase();
+      const units = parseFloat(t.Units) || 0;
+      
+      if (!symbolData[symbol]) {
+        symbolData[symbol] = { totalBought: 0, totalSold: 0, firstBuy: null, lastSell: null };
+      }
+      
+      const date = new Date(t.Date);
+      
+      if (['PURCHASED', 'BUY', 'BOUGHT'].includes(type)) {
+        symbolData[symbol].totalBought += units;
+        if (!symbolData[symbol].firstBuy || date < symbolData[symbol].firstBuy) {
+          symbolData[symbol].firstBuy = date;
+        }
+      } else if (['SOLD', 'SELL'].includes(type)) {
+        symbolData[symbol].totalSold += units;
+        if (!symbolData[symbol].lastSell || date > symbolData[symbol].lastSell) {
+          symbolData[symbol].lastSell = date;
+        }
+      }
+    });
+    
+    // Check which symbols are in open positions
+    const openSymbols = new Set(allPositionDetails.map(p => p.symbol));
+    
+    // Find anomalies
+    Object.entries(symbolData).forEach(([symbol, data]) => {
+      const { totalBought, totalSold, firstBuy, lastSell } = data;
+      const isOpen = openSymbols.has(symbol);
+      const hasExistingSplit = stockSplits.some(s => s.symbol === symbol);
+      
+      // Skip if already has a split configured
+      if (hasExistingSplit) return;
+      
+      // Anomaly 1: Sold more than bought (forward split likely)
+      if (totalSold > totalBought * 1.5) {
+        const ratio = Math.round(totalSold / totalBought);
+        suggestions.push({
+          symbol,
+          issue: 'Sold more than purchased',
+          bought: totalBought,
+          sold: totalSold,
+          suggestedRatio: `${ratio}:1 forward split`,
+          dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
+          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+        });
+      }
+      // Anomaly 2: Bought significantly more than sold but no open position (reverse split likely)
+      else if (totalBought > totalSold * 1.5 && !isOpen && totalSold > 0) {
+        const ratio = Math.round(totalBought / totalSold);
+        suggestions.push({
+          symbol,
+          issue: 'Purchased more than sold, but position closed',
+          bought: totalBought,
+          sold: totalSold,
+          suggestedRatio: `1:${ratio} reverse split`,
+          dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
+          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+        });
+      }
+      // Anomaly 3: Should have open position but doesn't show (may need split to reconcile)
+      else if (totalBought > totalSold * 1.01 && !isOpen) {
+        suggestions.push({
+          symbol,
+          issue: 'Should have open position but none detected',
+          bought: totalBought,
+          sold: totalSold,
+          suggestedRatio: 'Unknown - research needed',
+          dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
+          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+        });
+      }
+    });
+    
+    return suggestions.sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }, [transactions, allPositionDetails, stockSplits]);
   // ============================================
   // RENDER FUNCTIONS
   // ============================================
@@ -1690,10 +1775,7 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
           </div>
 
           <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Short-Term Gains (All Time)</h3>
-              <span style={{ padding: '4px 12px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '9999px', fontSize: '12px', fontWeight: '600' }}>ST</span>
-            </div>
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Short-Term Gains (All Time)</h3>
             <div style={{ fontSize: '36px', fontWeight: 'bold', color: stGains >= 0 ? '#34d399' : '#f87171', fontFamily: 'monospace' }}>
               {stGains >= 0 ? '+' : ''}${stGains.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
@@ -1703,10 +1785,7 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
           </div>
 
           <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Long-Term Gains (All Time)</h3>
-              <span style={{ padding: '4px 12px', background: 'rgba(59, 130, 246, 0.2)', color: '#3b82f6', borderRadius: '9999px', fontSize: '12px', fontWeight: '600' }}>LT</span>
-            </div>
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Long-Term Gains (All Time)</h3>
             <div style={{ fontSize: '36px', fontWeight: 'bold', color: ltGains >= 0 ? '#34d399' : '#f87171', fontFamily: 'monospace' }}>
               {ltGains >= 0 ? '+' : ''}${ltGains.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
@@ -1735,6 +1814,150 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                   {(optionsStGains + optionsLtGains) >= 0 ? '+' : ''}${(optionsStGains + optionsLtGains).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Realized Gains/Losses Charts */}
+        {closedPositions.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '16px' }}>
+            {/* Chart 1: Realized Gains by Year */}
+            <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Realized Gains by Year</h3>
+              {(() => {
+                const yearlyData = {};
+                [...closedPositions, ...closedOptionsPositions].forEach(p => {
+                  const year = new Date(p.closeDate).getFullYear();
+                  if (!yearlyData[year]) yearlyData[year] = { stGains: 0, stLosses: 0, ltGains: 0, ltLosses: 0 };
+                  const pnl = p.pnl || 0;
+                  if (p.taxStatus === 'ST') {
+                    if (pnl >= 0) yearlyData[year].stGains += pnl;
+                    else yearlyData[year].stLosses += pnl;
+                  } else {
+                    if (pnl >= 0) yearlyData[year].ltGains += pnl;
+                    else yearlyData[year].ltLosses += pnl;
+                  }
+                });
+                const years = Object.keys(yearlyData).sort();
+                const maxVal = Math.max(...years.map(y => Math.max(yearlyData[y].stGains + yearlyData[y].ltGains, Math.abs(yearlyData[y].stLosses + yearlyData[y].ltLosses))));
+                
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {years.map(year => {
+                      const data = yearlyData[year];
+                      const totalGains = data.stGains + data.ltGains;
+                      const totalLosses = Math.abs(data.stLosses + data.ltLosses);
+                      const gainsWidth = maxVal > 0 ? (totalGains / maxVal) * 100 : 0;
+                      const lossesWidth = maxVal > 0 ? (totalLosses / maxVal) * 100 : 0;
+                      
+                      return (
+                        <div key={year}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: '600' }}>{year}</span>
+                            <span style={{ color: totalGains - totalLosses >= 0 ? '#34d399' : '#f87171' }}>
+                              Net: {totalGains - totalLosses >= 0 ? '+' : ''}${(totalGains - totalLosses).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px', height: '24px' }}>
+                            {/* Gains bar */}
+                            <div style={{ display: 'flex', flex: 1, background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
+                              <div style={{ width: `${(data.stGains / maxVal) * 100}%`, background: '#fb923c', transition: 'width 0.3s' }} title={`ST Gains: $${data.stGains.toLocaleString()}`} />
+                              <div style={{ width: `${(data.ltGains / maxVal) * 100}%`, background: '#3b82f6', transition: 'width 0.3s' }} title={`LT Gains: $${data.ltGains.toLocaleString()}`} />
+                            </div>
+                          </div>
+                          {totalLosses > 0 && (
+                            <div style={{ display: 'flex', gap: '4px', height: '16px', marginTop: '2px' }}>
+                              <div style={{ display: 'flex', flex: 1, background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
+                                <div style={{ width: `${(Math.abs(data.stLosses) / maxVal) * 100}%`, background: 'rgba(248, 113, 113, 0.6)', transition: 'width 0.3s' }} title={`ST Losses: $${data.stLosses.toLocaleString()}`} />
+                                <div style={{ width: `${(Math.abs(data.ltLosses) / maxVal) * 100}%`, background: 'rgba(248, 113, 113, 0.3)', transition: 'width 0.3s' }} title={`LT Losses: $${data.ltLosses.toLocaleString()}`} />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: '#94a3b8' }}>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#fb923c', borderRadius: '2px', marginRight: '4px' }} />ST Gains</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#3b82f6', borderRadius: '2px', marginRight: '4px' }} />LT Gains</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: 'rgba(248, 113, 113, 0.6)', borderRadius: '2px', marginRight: '4px' }} />Losses</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Chart 2: Capital Losses Breakdown by Year */}
+            <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Capital Losses Breakdown</h3>
+              {(() => {
+                const yearlyLosses = {};
+                [...closedPositions, ...closedOptionsPositions].forEach(p => {
+                  const pnl = p.pnl || 0;
+                  if (pnl < 0) {
+                    const year = new Date(p.closeDate).getFullYear();
+                    if (!yearlyLosses[year]) yearlyLosses[year] = { legitimate: 0, washSale: 0 };
+                    yearlyLosses[year].legitimate += Math.abs(pnl);
+                  }
+                });
+                
+                // Add wash sale amounts
+                washSales.forEach(ws => {
+                  const year = new Date(ws.sellDate).getFullYear();
+                  if (!yearlyLosses[year]) yearlyLosses[year] = { legitimate: 0, washSale: 0 };
+                  yearlyLosses[year].washSale += ws.disallowedLoss;
+                  yearlyLosses[year].legitimate -= ws.disallowedLoss; // Remove from legitimate
+                });
+                
+                // Ensure no negative legitimate values
+                Object.keys(yearlyLosses).forEach(year => {
+                  if (yearlyLosses[year].legitimate < 0) yearlyLosses[year].legitimate = 0;
+                });
+                
+                const years = Object.keys(yearlyLosses).sort();
+                const maxLoss = Math.max(...years.map(y => yearlyLosses[y].legitimate + yearlyLosses[y].washSale), 1);
+                
+                if (years.length === 0) {
+                  return <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No capital losses recorded</p>;
+                }
+                
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {years.map(year => {
+                      const data = yearlyLosses[year];
+                      const total = data.legitimate + data.washSale;
+                      
+                      return (
+                        <div key={year}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: '600' }}>{year}</span>
+                            <span style={{ color: '#f87171' }}>
+                              -${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', height: '24px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div 
+                              style={{ width: `${(data.legitimate / maxLoss) * 100}%`, background: '#f87171', transition: 'width 0.3s' }} 
+                              title={`Deductible: $${data.legitimate.toLocaleString()}`} 
+                            />
+                            <div 
+                              style={{ width: `${(data.washSale / maxLoss) * 100}%`, background: '#fb923c', transition: 'width 0.3s' }} 
+                              title={`Wash Sale (deferred): $${data.washSale.toLocaleString()}`} 
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
+                            <span>Deductible: ${data.legitimate.toLocaleString()}</span>
+                            {data.washSale > 0 && <span style={{ color: '#fb923c' }}>Wash Sale: ${data.washSale.toLocaleString()}</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: '#94a3b8' }}>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#f87171', borderRadius: '2px', marginRight: '4px' }} />Deductible Loss</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#fb923c', borderRadius: '2px', marginRight: '4px' }} />Wash Sale (deferred)</span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -1825,59 +2048,20 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
               <h3 style={{ fontSize: '18px', fontWeight: 'bold' }}>Stock Splits</h3>
               <p style={{ fontSize: '14px', color: '#94a3b8', marginTop: '4px' }}>Adjust historical positions for stock splits</p>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {allTradedSymbols.length > 0 && (
-                <button
-                  onClick={async () => {
-                    setFetchingSplits(true);
-                    const newChecked = new Set();
-                    
-                    for (const item of allTradedSymbols) {
-                      const dateRange = {
-                        start: item.firstBuy,
-                        end: item.lastActivity
-                      };
-                      await fetchStockSplits(item.symbol, false, dateRange);
-                      newChecked.add(item.symbol);
-                      await new Promise(resolve => setTimeout(resolve, 300));
-                    }
-                    
-                    setCheckedSplitSymbols(newChecked);
-                    setFetchingSplits(false);
-                  }}
-                  disabled={fetchingSplits}
-                  style={{
-                    padding: '8px 16px',
-                    background: fetchingSplits ? '#475569' : '#10b981',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '8px',
-                    fontWeight: '500',
-                    cursor: fetchingSplits ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}
-                >
-                  {fetchingSplits && <RefreshCw style={{ width: '14px', height: '14px', animation: 'spin 1s linear infinite' }} />}
-                  {fetchingSplits ? 'Fetching...' : `Fetch Splits (${allTradedSymbols.length} open positions)`}
-                </button>
-              )}
-              <button
-                onClick={() => setShowSplitForm(!showSplitForm)}
-                style={{
-                  padding: '8px 16px',
-                  background: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontWeight: '500',
-                  cursor: 'pointer'
-                }}
-              >
-                {showSplitForm ? 'Cancel' : '+ Add Manually'}
-              </button>
-            </div>
+            <button
+              onClick={() => setShowSplitForm(!showSplitForm)}
+              style={{
+                padding: '8px 16px',
+                background: '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontWeight: '500',
+                cursor: 'pointer'
+              }}
+            >
+              {showSplitForm ? 'Cancel' : '+ Add Manually'}
+            </button>
           </div>
 
           {/* Manual Add Form */}
@@ -1927,150 +2111,71 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
             </div>
           )}
 
-          {/* Existing Splits List */}
-          {stockSplits.length > 0 && (
-            <div>
-              {/* Warning about date accuracy */}
-              <div style={{ 
-                padding: '12px 16px', 
-                background: 'rgba(251, 146, 60, 0.1)', 
-                border: '1px solid rgba(251, 146, 60, 0.3)', 
-                borderRadius: '8px', 
-                marginBottom: '16px',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '10px'
-              }}>
-                <AlertTriangle style={{ width: '18px', height: '18px', color: '#fb923c', flexShrink: 0, marginTop: '2px' }} />
-                <div>
-                  <div style={{ fontWeight: '600', color: '#fb923c', marginBottom: '4px' }}>Verify Split Dates</div>
-                  <div style={{ fontSize: '13px', color: '#94a3b8' }}>
-                    Fetched dates may be off by a few days due to data source inconsistencies. 
-                    Click the date to edit, or use "Verify" to check online. Incorrect dates can cause position calculation errors.
-                  </div>
-                </div>
+          {/* Suggested Split Additions */}
+          {splitSuggestions.length > 0 && (
+            <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <AlertCircle style={{ width: '18px', height: '18px', color: '#a78bfa' }} />
+                <h4 style={{ fontWeight: '600', color: '#a78bfa' }}>Suggested Split Additions</h4>
+                <span style={{ fontSize: '12px', color: '#94a3b8' }}>({splitSuggestions.length} anomalies detected in your data)</span>
               </div>
-              
-              <h4 style={{ fontSize: '14px', fontWeight: '600', color: '#94a3b8', marginBottom: '12px' }}>Recorded Splits ({stockSplits.length})</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {stockSplits
-                  .map((split, originalIndex) => ({ split, originalIndex }))
-                  .sort((a, b) => new Date(b.split.date) - new Date(a.split.date))
-                  .map(({ split, originalIndex }) => {
-                    const verified = isSplitVerified(split);
-                    return (
-                      <div key={`${split.symbol}-${split.date}-${originalIndex}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                          <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
-                          
-                          {/* Editable date */}
-                          {editingSplitIndex === originalIndex ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <input
-                                type="date"
-                                defaultValue={split.date}
-                                autoFocus
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    updateSplitDate(originalIndex, e.target.value);
-                                  } else if (e.key === 'Escape') {
-                                    setEditingSplitIndex(null);
-                                  }
-                                }}
-                                style={{ 
-                                  padding: '4px 8px', 
-                                  background: '#334155', 
-                                  border: '1px solid #3b82f6', 
-                                  borderRadius: '6px', 
-                                  color: '#f1f5f9', 
-                                  outline: 'none',
-                                  fontSize: '14px'
-                                }}
-                                id={`split-date-${originalIndex}`}
-                              />
-                              <button
-                                onClick={() => {
-                                  const input = document.getElementById(`split-date-${originalIndex}`);
-                                  updateSplitDate(originalIndex, input.value);
-                                }}
-                                style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={() => setEditingSplitIndex(null)}
-                                style={{ padding: '4px 8px', background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '12px' }}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <span 
-                              onClick={() => setEditingSplitIndex(originalIndex)}
-                              style={{ 
-                                color: '#94a3b8', 
-                                fontSize: '14px', 
-                                cursor: 'pointer',
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                border: '1px dashed transparent',
-                                transition: 'all 0.2s'
-                              }}
-                              onMouseOver={(e) => {
-                                e.currentTarget.style.borderColor = '#475569';
-                                e.currentTarget.style.background = 'rgba(51, 65, 85, 0.3)';
-                              }}
-                              onMouseOut={(e) => {
-                                e.currentTarget.style.borderColor = 'transparent';
-                                e.currentTarget.style.background = 'transparent';
-                              }}
-                              title="Click to edit date"
-                            >
-                              {new Date(split.date).toLocaleDateString()}
-                            </span>
-                          )}
-                          
-                          <span style={{ 
-                            padding: '4px 10px', 
-                            background: 'rgba(59, 130, 246, 0.2)', 
-                            color: '#60a5fa', 
-                            borderRadius: '6px', 
-                            fontSize: '13px',
-                            fontWeight: '500'
-                          }}>
-                            {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
+              <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '16px' }}>
+                These symbols show discrepancies between purchased and sold quantities, which often indicates a stock split occurred. Research and add the correct split details.
+              </p>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(139, 92, 246, 0.3)' }}>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
+                      <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Issue Detected</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Bought</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Sold</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Likely Split</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {splitSuggestions.map((suggestion, index) => (
+                      <tr key={`${suggestion.symbol}-${index}`} style={{ borderBottom: '1px solid rgba(51, 65, 85, 0.3)' }}>
+                        <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: '600' }}>{suggestion.symbol}</td>
+                        <td style={{ padding: '10px 12px', fontSize: '13px', color: '#94a3b8' }}>{suggestion.issue}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '13px' }}>{suggestion.bought.toFixed(4)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '13px' }}>{suggestion.sold.toFixed(4)}</td>
+                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                          <span style={{ padding: '4px 8px', background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', borderRadius: '4px', fontSize: '12px' }}>
+                            {suggestion.suggestedRatio}
                           </span>
-                          
-                          {/* Verification status */}
-                          {verified ? (
-                            <span style={{ padding: '4px 8px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', borderRadius: '4px', fontSize: '11px', fontWeight: '500' }}>
-                              ✓ Verified
-                            </span>
-                          ) : (
-                            <span style={{ padding: '4px 8px', background: 'rgba(251, 146, 60, 0.2)', color: '#fb923c', borderRadius: '4px', fontSize: '11px', fontWeight: '500' }}>
-                              ⚠ Unverified
-                            </span>
-                          )}
-                        </div>
-                        
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <button
-                            onClick={() => openVerifySearch(split)}
-                            style={{
-                              padding: '4px 10px',
-                              background: 'transparent',
-                              color: '#60a5fa',
-                              border: '1px solid rgba(59, 130, 246, 0.5)',
-                              borderRadius: '6px',
-                              fontSize: '12px',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            Verify 🔗
-                          </button>
-                          {!verified && (
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                             <button
-                              onClick={() => markSplitVerified(split)}
+                              onClick={() => {
+                                const query = encodeURIComponent(`${suggestion.symbol} stock split ${suggestion.searchYear}`);
+                                window.open(`https://www.google.com/search?q=${query}`, '_blank');
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                background: 'transparent',
+                                color: '#60a5fa',
+                                border: '1px solid rgba(59, 130, 246, 0.5)',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <Search style={{ width: '12px', height: '12px' }} />
+                              Research
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSplitSymbol(suggestion.symbol);
+                                setSplitDate('');
+                                setSplitRatio('');
+                                setShowSplitForm(true);
+                              }}
                               style={{
                                 padding: '4px 10px',
                                 background: 'rgba(16, 185, 129, 0.2)',
@@ -2081,25 +2186,124 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                                 cursor: 'pointer'
                               }}
                             >
-                              ✓ OK
+                              + Add Split
                             </button>
-                          )}
-                          <button
-                            onClick={() => removeSplit(originalIndex)}
-                            style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Existing Splits List */}
+          {stockSplits.length > 0 && (
+            <div>
+              <h4 style={{ fontSize: '14px', fontWeight: '600', color: '#94a3b8', marginBottom: '12px' }}>Recorded Splits ({stockSplits.length})</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {stockSplits
+                  .map((split, originalIndex) => ({ split, originalIndex }))
+                  .sort((a, b) => new Date(b.split.date) - new Date(a.split.date))
+                  .map(({ split, originalIndex }) => (
+                    <div key={`${split.symbol}-${split.date}-${originalIndex}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: '600', fontSize: '16px', minWidth: '60px' }}>{split.symbol}</span>
+                        
+                        {/* Editable date */}
+                        {editingSplitIndex === originalIndex ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <input
+                              type="date"
+                              defaultValue={split.date}
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  updateSplitDate(originalIndex, e.target.value);
+                                } else if (e.key === 'Escape') {
+                                  setEditingSplitIndex(null);
+                                }
+                              }}
+                              style={{ 
+                                padding: '4px 8px', 
+                                background: '#334155', 
+                                border: '1px solid #3b82f6', 
+                                borderRadius: '6px', 
+                                color: '#f1f5f9', 
+                                outline: 'none',
+                                fontSize: '14px'
+                              }}
+                              id={`split-date-${originalIndex}`}
+                            />
+                            <button
+                              onClick={() => {
+                                const input = document.getElementById(`split-date-${originalIndex}`);
+                                updateSplitDate(originalIndex, input.value);
+                              }}
+                              style={{ padding: '4px 10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', fontSize: '12px', fontWeight: '500', cursor: 'pointer' }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              onClick={() => setEditingSplitIndex(null)}
+                              style={{ padding: '4px 8px', background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer', fontSize: '12px' }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <span 
+                            onClick={() => setEditingSplitIndex(originalIndex)}
+                            style={{ 
+                              color: '#94a3b8', 
+                              fontSize: '14px', 
+                              cursor: 'pointer',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              border: '1px dashed transparent',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.borderColor = '#475569';
+                              e.currentTarget.style.background = 'rgba(51, 65, 85, 0.3)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.borderColor = 'transparent';
+                              e.currentTarget.style.background = 'transparent';
+                            }}
+                            title="Click to edit date"
                           >
-                            Remove
-                          </button>
-                        </div>
+                            {new Date(split.date).toLocaleDateString()}
+                          </span>
+                        )}
+                        
+                        <span style={{ 
+                          padding: '4px 10px', 
+                          background: 'rgba(59, 130, 246, 0.2)', 
+                          color: '#60a5fa', 
+                          borderRadius: '6px', 
+                          fontSize: '13px',
+                          fontWeight: '500'
+                        }}>
+                          {typeof split.ratio === 'number' ? split.ratio.toFixed(2) : split.ratio}:1
+                        </span>
                       </div>
-                    );
-                  })}
+                      
+                      <button
+                        onClick={() => removeSplit(originalIndex)}
+                        style={{ color: '#f87171', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '4px 8px' }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
               </div>
             </div>
           )}
           
-          {stockSplits.length === 0 && !showSplitForm && (
-            <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured. Use "Fetch Splits" or add manually.</p>
+          {stockSplits.length === 0 && !showSplitForm && splitSuggestions.length === 0 && (
+            <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No stock splits configured.</p>
           )}
         </div>
 
@@ -3319,6 +3523,13 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
               >
                 Reset
               </button>
+              <a
+                href="mailto:support@harvestseason.tax"
+                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', fontWeight: '500', borderRadius: '8px', cursor: 'pointer', fontSize: '14px', border: '1px solid rgba(16, 185, 129, 0.3)', textDecoration: 'none' }}
+              >
+                <Mail style={{ width: '16px', height: '16px' }} />
+                Contact Us
+              </a>
             </div>
           )}
         </div>
