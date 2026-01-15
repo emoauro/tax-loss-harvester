@@ -5,37 +5,117 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
     <!-- Primary Meta Tags -->
-    <title>Harvest Season - Tax Loss Harvesting Tracker</title>
-    <meta name="title" content="Harvest Season - Tax Loss Harvesting Tracker" />
-    <meta name="description" content="Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis. Upload your brokerage CSV and optimize your tax strategy." />
-    <meta name="keywords" content="tax loss harvesting, capital gains, wash sale, FIFO, stock taxes, portfolio tracker, investment taxes" />
+    <title>Harvest Season - Free Tax Loss Harvesting Tracker</title>
+    <meta name="title" content="Harvest Season - Free Tax Loss Harvesting Tracker" />
+    <meta name="description" content="Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis. Upload your brokerage CSV and optimize your tax strategy. No signup required." />
+    <meta name="keywords" content="tax loss harvesting, capital gains calculator, wash sale detector, FIFO calculator, stock tax calculator, portfolio tax tracker, investment tax tool, capital gains tax, short term gains, long term gains, tax optimization, brokerage CSV" />
     <meta name="author" content="Harvest Season" />
+    <meta name="robots" content="index, follow" />
+    <meta name="language" content="English" />
+    
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://harvestseason.tax/" />
     
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://harvestseason.tax/" />
-    <meta property="og:title" content="Harvest Season - Tax Loss Harvesting Tracker" />
-    <meta property="og:description" content="Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis." />
+    <meta property="og:title" content="Harvest Season - Free Tax Loss Harvesting Tracker" />
+    <meta property="og:description" content="Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis. No signup required." />
     <meta property="og:image" content="https://harvestseason.tax/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Harvest Season" />
     
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:url" content="https://harvestseason.tax/" />
-    <meta name="twitter:title" content="Harvest Season - Tax Loss Harvesting Tracker" />
+    <meta name="twitter:title" content="Harvest Season - Free Tax Loss Harvesting Tracker" />
     <meta name="twitter:description" content="Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis." />
     <meta name="twitter:image" content="https://harvestseason.tax/og-image.png" />
     
     <!-- Theme Color -->
     <meta name="theme-color" content="#0f172a" />
+    <meta name="msapplication-TileColor" content="#0f172a" />
     
-    <!-- Prevent caching during development -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <!-- Structured Data (JSON-LD) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Harvest Season",
+      "description": "Free tax loss harvesting tracker with FIFO tracking, wash sale detection, options support, and capital gains analysis.",
+      "url": "https://harvestseason.tax",
+      "applicationCategory": "FinanceApplication",
+      "operatingSystem": "Any",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "featureList": [
+        "FIFO Tax Lot Tracking",
+        "Wash Sale Detection",
+        "Options Trading Support",
+        "Capital Gains Analysis",
+        "CSV Import",
+        "Short-term vs Long-term Gains",
+        "Tax Loss Harvesting Opportunities"
+      ],
+      "screenshot": "https://harvestseason.tax/og-image.png",
+      "softwareVersion": "1.0",
+      "author": {
+        "@type": "Organization",
+        "name": "Harvest Season"
+      }
+    }
+    </script>
+    
+    <!-- FAQ Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What is tax loss harvesting?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Tax loss harvesting is a strategy where you sell investments at a loss to offset capital gains taxes. This can reduce your tax bill while maintaining your investment strategy."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Harvest Season free to use?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, Harvest Season is completely free to use. No signup or account required. Your data stays in your browser."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is a wash sale?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "A wash sale occurs when you sell a security at a loss and buy the same or substantially identical security within 30 days before or after the sale. The loss is disallowed for tax purposes."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is FIFO tracking?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "FIFO (First In, First Out) is a method of calculating capital gains where the oldest shares purchased are considered sold first. This is the default method used by most brokerages."
+          }
+        }
+      ]
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>
