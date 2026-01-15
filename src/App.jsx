@@ -420,6 +420,9 @@ const TaxLossHarvester = () => {
     const saved = localStorage.getItem('tlh_verifiedSplits');
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
+  const [dismissedSplitSuggestions, setDismissedSplitSuggestions] = useState(() => {
+    return JSON.parse(localStorage.getItem('tlh_dismissedSplitSuggestions') || '[]');
+  });
 
   // Save to localStorage whenever data changes
   useEffect(() => {
@@ -444,6 +447,9 @@ const TaxLossHarvester = () => {
   useEffect(() => {
     localStorage.setItem('tlh_verifiedSplits', JSON.stringify([...verifiedSplits]));
   }, [verifiedSplits]);
+  useEffect(() => {
+    localStorage.setItem('tlh_dismissedSplitSuggestions', JSON.stringify(dismissedSplitSuggestions));
+  }, [dismissedSplitSuggestions]);
 
   // ============================================
   // OPTIONS PARSING UTILITIES
@@ -1537,7 +1543,7 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
           symbolData[symbol].firstBuy = date;
         }
       } else if (['SOLD', 'SELL'].includes(type)) {
-        symbolData[symbol].totalSold += units;
+        symbolData[symbol].totalSold += Math.abs(units);
       }
       
       // Track last activity date (buy or sell)
@@ -1583,9 +1589,11 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       }))
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [transactions, allPositionDetails, currentDate]);
+
   // Detect potential split issues based on transaction anomalies
   const splitSuggestions = useMemo(() => {
     const suggestions = [];
+    const dismissedSuggestions = dismissedSplitSuggestions;
     const symbolData = {};
     
     // Calculate bought/sold totals per symbol
@@ -1594,7 +1602,7 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
       if (!symbol || isOptionSymbol(symbol)) return;
       
       const type = (t['Transaction Type'] || '').toUpperCase();
-      const units = parseFloat(t.Units) || 0;
+      const units = Math.abs(parseFloat(t.Units) || 0); // Always use absolute value
       
       if (!symbolData[symbol]) {
         symbolData[symbol] = { totalBought: 0, totalSold: 0, firstBuy: null, lastSell: null };
@@ -1618,57 +1626,78 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
     // Check which symbols are in open positions
     const openSymbols = new Set(allPositionDetails.map(p => p.symbol));
     
+    // Get positions needing prices (open positions without prices set)
+    const positionsNeedingPrices = allPositionDetails.filter(p => !p.hasPriceSet);
+    const symbolsNeedingPrices = new Set(positionsNeedingPrices.map(p => p.symbol));
+    
     // Find anomalies
     Object.entries(symbolData).forEach(([symbol, data]) => {
       const { totalBought, totalSold, firstBuy, lastSell } = data;
-      const isOpen = openSymbols.has(symbol);
       const hasExistingSplit = stockSplits.some(s => s.symbol === symbol);
       
-      // Skip if already has a split configured
+      // Skip if already has a split configured or dismissed
       if (hasExistingSplit) return;
+      if (dismissedSuggestions.includes(symbol)) return;
+      
+      // Skip if no meaningful activity
+      if (totalBought === 0 && totalSold === 0) return;
+      
+      // Calculate discrepancy percentage
+      const difference = Math.abs(totalBought - totalSold);
+      const larger = Math.max(totalBought, totalSold);
+      const discrepancyPct = larger > 0 ? difference / larger : 0;
       
       // Anomaly 1: Sold more than bought (forward split likely)
-      if (totalSold > totalBought * 1.5) {
-        const ratio = Math.round(totalSold / totalBought);
+      if (totalSold > totalBought && totalBought > 0 && discrepancyPct >= 0.05) {
+        const ratio = totalBought > 0 ? Math.round(totalSold / totalBought) : 0;
         suggestions.push({
           symbol,
           issue: 'Sold more than purchased',
           bought: totalBought,
           sold: totalSold,
-          suggestedRatio: `${ratio}:1 forward split`,
           dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
-          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear(),
+          priority: 'high'
         });
+        return;
       }
-      // Anomaly 2: Bought significantly more than sold but no open position (reverse split likely)
-      else if (totalBought > totalSold * 1.5 && !isOpen && totalSold > 0) {
-        const ratio = Math.round(totalBought / totalSold);
+      
+      // Anomaly 2: Bought more than sold but position appears closed (reverse split or missing data)
+      if (totalBought > totalSold && totalSold > 0 && discrepancyPct >= 0.05 && !openSymbols.has(symbol)) {
         suggestions.push({
           symbol,
-          issue: 'Purchased more than sold, but position closed',
+          issue: 'Purchased more than sold, but no open position',
           bought: totalBought,
           sold: totalSold,
-          suggestedRatio: `1:${ratio} reverse split`,
           dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
-          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear(),
+          priority: 'high'
         });
+        return;
       }
-      // Anomaly 3: Should have open position but doesn't show (may need split to reconcile)
-      else if (totalBought > totalSold * 1.01 && !isOpen) {
+      
+      // Anomaly 3: Position needs price - suggest checking for splits
+      if (symbolsNeedingPrices.has(symbol) && totalBought > 0) {
         suggestions.push({
           symbol,
-          issue: 'Should have open position but none detected',
+          issue: 'Open position - verify no splits during holding period',
           bought: totalBought,
           sold: totalSold,
-          suggestedRatio: 'Unknown - research needed',
-          dateRange: firstBuy && lastSell ? `${firstBuy.toLocaleDateString()} - ${lastSell.toLocaleDateString()}` : 'Unknown',
-          searchYear: lastSell ? lastSell.getFullYear() : new Date().getFullYear()
+          dateRange: firstBuy ? `${firstBuy.toLocaleDateString()} - Present` : 'Unknown',
+          searchYear: new Date().getFullYear(),
+          priority: 'low'
         });
       }
     });
     
-    return suggestions.sort((a, b) => a.symbol.localeCompare(b.symbol));
-  }, [transactions, allPositionDetails, stockSplits]);
+    // Sort by priority (high first) then alphabetically
+    return suggestions.sort((a, b) => {
+      if (a.priority === 'high' && b.priority !== 'high') return -1;
+      if (b.priority === 'high' && a.priority !== 'high') return 1;
+      return a.symbol.localeCompare(b.symbol);
+    });
+  }, [transactions, allPositionDetails, stockSplits, dismissedSplitSuggestions]);
+
   // ============================================
   // RENDER FUNCTIONS
   // ============================================
@@ -1821,144 +1850,159 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
         {/* Realized Gains/Losses Charts */}
         {closedPositions.length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '16px' }}>
-            {/* Chart 1: Realized Gains by Year */}
-            <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Realized Gains by Year</h3>
-              {(() => {
-                const yearlyData = {};
-                [...closedPositions, ...closedOptionsPositions].forEach(p => {
-                  const year = new Date(p.closeDate).getFullYear();
-                  if (!yearlyData[year]) yearlyData[year] = { stGains: 0, stLosses: 0, ltGains: 0, ltLosses: 0 };
-                  const pnl = p.pnl || 0;
-                  if (p.taxStatus === 'ST') {
-                    if (pnl >= 0) yearlyData[year].stGains += pnl;
-                    else yearlyData[year].stLosses += pnl;
-                  } else {
-                    if (pnl >= 0) yearlyData[year].ltGains += pnl;
-                    else yearlyData[year].ltLosses += pnl;
-                  }
-                });
-                const years = Object.keys(yearlyData).sort();
-                const maxVal = Math.max(...years.map(y => Math.max(yearlyData[y].stGains + yearlyData[y].ltGains, Math.abs(yearlyData[y].stLosses + yearlyData[y].ltLosses))));
+            {(() => {
+              // Calculate data for both charts
+              const yearlyGains = {};
+              const yearlyLosses = {};
+              
+              [...closedPositions, ...closedOptionsPositions].forEach(p => {
+                const year = new Date(p.saleDate || p.closeDate).getFullYear();
+                const pnl = p.pnl || 0;
                 
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {years.map(year => {
-                      const data = yearlyData[year];
-                      const totalGains = data.stGains + data.ltGains;
-                      const totalLosses = Math.abs(data.stLosses + data.ltLosses);
-                      const gainsWidth = maxVal > 0 ? (totalGains / maxVal) * 100 : 0;
-                      const lossesWidth = maxVal > 0 ? (totalLosses / maxVal) * 100 : 0;
-                      
-                      return (
-                        <div key={year}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
-                            <span style={{ fontWeight: '600' }}>{year}</span>
-                            <span style={{ color: totalGains - totalLosses >= 0 ? '#34d399' : '#f87171' }}>
-                              Net: {totalGains - totalLosses >= 0 ? '+' : ''}${(totalGains - totalLosses).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </span>
+                if (!yearlyGains[year]) yearlyGains[year] = { stGains: 0, ltGains: 0 };
+                if (!yearlyLosses[year]) yearlyLosses[year] = { losses: 0 };
+                
+                if (pnl >= 0) {
+                  if (p.taxStatus === 'ST') yearlyGains[year].stGains += pnl;
+                  else yearlyGains[year].ltGains += pnl;
+                } else {
+                  yearlyLosses[year].losses += Math.abs(pnl);
+                }
+              });
+              
+              // Subtract wash sale disallowed amounts from losses (they're deferred, not deductible)
+              washSales.forEach(ws => {
+                const year = new Date(ws.sellDate).getFullYear();
+                if (yearlyLosses[year]) {
+                  yearlyLosses[year].losses -= ws.disallowedLoss;
+                  if (yearlyLosses[year].losses < 0) yearlyLosses[year].losses = 0;
+                }
+              });
+              
+              const allYears = [...new Set([...Object.keys(yearlyGains), ...Object.keys(yearlyLosses)])].sort();
+              
+              // Calculate max value for both charts (same scale)
+              const maxGain = Math.max(...allYears.map(y => (yearlyGains[y]?.stGains || 0) + (yearlyGains[y]?.ltGains || 0)), 1);
+              const maxLoss = Math.max(...allYears.map(y => yearlyLosses[y]?.losses || 0), 1);
+              const rawMax = Math.max(maxGain, maxLoss);
+              
+              // Round up to nice even number (1, 2, 5, 10, 20, 50, 100, etc.)
+              const niceNumbers = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
+              const targetMax = rawMax * 1.1; // Add 10% padding
+              const maxVal = niceNumbers.find(n => n >= targetMax) || Math.ceil(targetMax / 100000) * 100000;
+              
+              const chartHeight = 200;
+              
+              // Create 4 even increments
+              const increment = maxVal / 4;
+              const yAxisLabels = [maxVal, maxVal * 0.75, maxVal * 0.5, maxVal * 0.25, 0];
+              
+              return (
+                <>
+                  {/* Chart 1: Realized Gains by Year */}
+                  <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Realized Gains by Year</h3>
+                    <div style={{ display: 'flex' }}>
+                      {/* Y-axis */}
+                      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: `${chartHeight}px`, paddingRight: '8px', borderRight: '1px solid #475569' }}>
+                        {yAxisLabels.map((val, i) => (
+                          <div key={i} style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'right', minWidth: '45px' }}>
+                            ${val >= 1000 ? `${(val/1000).toFixed(0)}k` : val.toFixed(0)}
                           </div>
-                          <div style={{ display: 'flex', gap: '4px', height: '24px' }}>
-                            {/* Gains bar */}
-                            <div style={{ display: 'flex', flex: 1, background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
-                              <div style={{ width: `${(data.stGains / maxVal) * 100}%`, background: '#fb923c', transition: 'width 0.3s' }} title={`ST Gains: $${data.stGains.toLocaleString()}`} />
-                              <div style={{ width: `${(data.ltGains / maxVal) * 100}%`, background: '#3b82f6', transition: 'width 0.3s' }} title={`LT Gains: $${data.ltGains.toLocaleString()}`} />
-                            </div>
-                          </div>
-                          {totalLosses > 0 && (
-                            <div style={{ display: 'flex', gap: '4px', height: '16px', marginTop: '2px' }}>
-                              <div style={{ display: 'flex', flex: 1, background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
-                                <div style={{ width: `${(Math.abs(data.stLosses) / maxVal) * 100}%`, background: 'rgba(248, 113, 113, 0.6)', transition: 'width 0.3s' }} title={`ST Losses: $${data.stLosses.toLocaleString()}`} />
-                                <div style={{ width: `${(Math.abs(data.ltLosses) / maxVal) * 100}%`, background: 'rgba(248, 113, 113, 0.3)', transition: 'width 0.3s' }} title={`LT Losses: $${data.ltLosses.toLocaleString()}`} />
+                        ))}
+                      </div>
+                      {/* Bars */}
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', height: `${chartHeight}px`, borderBottom: '2px solid #475569', marginLeft: '8px' }}>
+                        {allYears.map(year => {
+                          const data = yearlyGains[year] || { stGains: 0, ltGains: 0 };
+                          const stHeight = maxVal > 0 ? (data.stGains / maxVal) * (chartHeight - 10) : 0;
+                          const ltHeight = maxVal > 0 ? (data.ltGains / maxVal) * (chartHeight - 10) : 0;
+                          
+                          return (
+                            <div key={year} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', width: '40px', height: `${chartHeight - 10}px` }}>
+                                {data.ltGains > 0 && (
+                                  <div 
+                                    style={{ width: '40px', height: `${ltHeight}px`, background: '#3b82f6', borderRadius: '4px 4px 0 0' }}
+                                    title={`LT Gains: $${data.ltGains.toLocaleString()}`}
+                                  />
+                                )}
+                                {data.stGains > 0 && (
+                                  <div 
+                                    style={{ width: '40px', height: `${stHeight}px`, background: '#fb923c', borderRadius: data.ltGains > 0 ? '0' : '4px 4px 0 0' }}
+                                    title={`ST Gains: $${data.stGains.toLocaleString()}`}
+                                  />
+                                )}
                               </div>
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: '#94a3b8' }}>
-                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#fb923c', borderRadius: '2px', marginRight: '4px' }} />ST Gains</span>
-                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#3b82f6', borderRadius: '2px', marginRight: '4px' }} />LT Gains</span>
-                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: 'rgba(248, 113, 113, 0.6)', borderRadius: '2px', marginRight: '4px' }} />Losses</span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* X-axis labels */}
+                    <div style={{ display: 'flex', marginLeft: '54px' }}>
+                      <div style={{ flex: 1, display: 'flex', justifyContent: 'space-around' }}>
+                        {allYears.map(year => (
+                          <div key={year} style={{ width: '40px', textAlign: 'center', fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>{year}</div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Legend */}
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '16px', fontSize: '12px', color: '#94a3b8', justifyContent: 'center' }}>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#fb923c', borderRadius: '2px', marginRight: '4px' }} />Short-Term</span>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#3b82f6', borderRadius: '2px', marginRight: '4px' }} />Long-Term</span>
                     </div>
                   </div>
-                );
-              })()}
-            </div>
 
-            {/* Chart 2: Capital Losses Breakdown by Year */}
-            <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
-              <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Capital Losses Breakdown</h3>
-              {(() => {
-                const yearlyLosses = {};
-                [...closedPositions, ...closedOptionsPositions].forEach(p => {
-                  const pnl = p.pnl || 0;
-                  if (pnl < 0) {
-                    const year = new Date(p.closeDate).getFullYear();
-                    if (!yearlyLosses[year]) yearlyLosses[year] = { legitimate: 0, washSale: 0 };
-                    yearlyLosses[year].legitimate += Math.abs(pnl);
-                  }
-                });
-                
-                // Add wash sale amounts
-                washSales.forEach(ws => {
-                  const year = new Date(ws.sellDate).getFullYear();
-                  if (!yearlyLosses[year]) yearlyLosses[year] = { legitimate: 0, washSale: 0 };
-                  yearlyLosses[year].washSale += ws.disallowedLoss;
-                  yearlyLosses[year].legitimate -= ws.disallowedLoss; // Remove from legitimate
-                });
-                
-                // Ensure no negative legitimate values
-                Object.keys(yearlyLosses).forEach(year => {
-                  if (yearlyLosses[year].legitimate < 0) yearlyLosses[year].legitimate = 0;
-                });
-                
-                const years = Object.keys(yearlyLosses).sort();
-                const maxLoss = Math.max(...years.map(y => yearlyLosses[y].legitimate + yearlyLosses[y].washSale), 1);
-                
-                if (years.length === 0) {
-                  return <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>No capital losses recorded</p>;
-                }
-                
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {years.map(year => {
-                      const data = yearlyLosses[year];
-                      const total = data.legitimate + data.washSale;
-                      
-                      return (
-                        <div key={year}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '4px' }}>
-                            <span style={{ fontWeight: '600' }}>{year}</span>
-                            <span style={{ color: '#f87171' }}>
-                              -${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                            </span>
+                  {/* Chart 2: Realized Losses by Year */}
+                  <div style={{ padding: '24px', background: 'rgba(30, 41, 59, 0.5)', border: '1px solid rgba(51, 65, 85, 0.6)', borderRadius: '12px' }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px' }}>Realized Losses by Year</h3>
+                    <div style={{ display: 'flex' }}>
+                      {/* Y-axis */}
+                      <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', height: `${chartHeight}px`, paddingRight: '8px', borderRight: '1px solid #475569' }}>
+                        {yAxisLabels.map((val, i) => (
+                          <div key={i} style={{ fontSize: '10px', color: '#94a3b8', textAlign: 'right', minWidth: '45px' }}>
+                            ${val >= 1000 ? `${(val/1000).toFixed(0)}k` : val.toFixed(0)}
                           </div>
-                          <div style={{ display: 'flex', height: '24px', background: 'rgba(51, 65, 85, 0.3)', borderRadius: '4px', overflow: 'hidden' }}>
-                            <div 
-                              style={{ width: `${(data.legitimate / maxLoss) * 100}%`, background: '#f87171', transition: 'width 0.3s' }} 
-                              title={`Deductible: $${data.legitimate.toLocaleString()}`} 
-                            />
-                            <div 
-                              style={{ width: `${(data.washSale / maxLoss) * 100}%`, background: '#fb923c', transition: 'width 0.3s' }} 
-                              title={`Wash Sale (deferred): $${data.washSale.toLocaleString()}`} 
-                            />
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>
-                            <span>Deductible: ${data.legitimate.toLocaleString()}</span>
-                            {data.washSale > 0 && <span style={{ color: '#fb923c' }}>Wash Sale: ${data.washSale.toLocaleString()}</span>}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '11px', color: '#94a3b8' }}>
-                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#f87171', borderRadius: '2px', marginRight: '4px' }} />Deductible Loss</span>
-                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#fb923c', borderRadius: '2px', marginRight: '4px' }} />Wash Sale (deferred)</span>
+                        ))}
+                      </div>
+                      {/* Bars */}
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-around', height: `${chartHeight}px`, borderBottom: '2px solid #475569', marginLeft: '8px' }}>
+                        {allYears.map(year => {
+                          const data = yearlyLosses[year] || { losses: 0 };
+                          const lossHeight = maxVal > 0 ? (data.losses / maxVal) * (chartHeight - 10) : 0;
+                          
+                          return (
+                            <div key={year} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', width: '40px', height: `${chartHeight - 10}px` }}>
+                                {data.losses > 0 && (
+                                  <div 
+                                    style={{ width: '40px', height: `${lossHeight}px`, background: '#ef4444', borderRadius: '4px 4px 0 0' }}
+                                    title={`Deductible Loss: $${data.losses.toLocaleString()}`}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    {/* X-axis labels */}
+                    <div style={{ display: 'flex', marginLeft: '54px' }}>
+                      <div style={{ flex: 1, display: 'flex', justifyContent: 'space-around' }}>
+                        {allYears.map(year => (
+                          <div key={year} style={{ width: '40px', textAlign: 'center', fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>{year}</div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Legend */}
+                    <div style={{ display: 'flex', gap: '16px', marginTop: '16px', fontSize: '12px', color: '#94a3b8', justifyContent: 'center' }}>
+                      <span><span style={{ display: 'inline-block', width: '12px', height: '12px', background: '#ef4444', borderRadius: '2px', marginRight: '4px' }} />Deductible Losses</span>
                     </div>
                   </div>
-                );
-              })()}
-            </div>
+                </>
+              );
+            })()}
           </div>
         )}
 
@@ -2112,25 +2156,43 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
           )}
 
           {/* Suggested Split Additions */}
-          {splitSuggestions.length > 0 && (
+          {(splitSuggestions.length > 0 || dismissedSplitSuggestions.length > 0) && (
             <div style={{ marginBottom: '16px', padding: '16px', background: 'rgba(139, 92, 246, 0.1)', border: '1px solid rgba(139, 92, 246, 0.3)', borderRadius: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                <AlertCircle style={{ width: '18px', height: '18px', color: '#a78bfa' }} />
-                <h4 style={{ fontWeight: '600', color: '#a78bfa' }}>Suggested Split Additions</h4>
-                <span style={{ fontSize: '12px', color: '#94a3b8' }}>({splitSuggestions.length} anomalies detected in your data)</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertCircle style={{ width: '18px', height: '18px', color: '#a78bfa' }} />
+                  <h4 style={{ fontWeight: '600', color: '#a78bfa' }}>Suggested Split Additions</h4>
+                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>({splitSuggestions.length} anomalies detected)</span>
+                </div>
+                {dismissedSplitSuggestions.length > 0 && (
+                  <button
+                    onClick={() => setDismissedSplitSuggestions([])}
+                    style={{
+                      padding: '4px 10px',
+                      background: 'transparent',
+                      color: '#a78bfa',
+                      border: '1px solid rgba(139, 92, 246, 0.5)',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Reset Suggestions ({dismissedSplitSuggestions.length} hidden)
+                  </button>
+                )}
               </div>
               <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '16px' }}>
-                These symbols show discrepancies between purchased and sold quantities, which often indicates a stock split occurred. Research and add the correct split details.
+                These symbols show discrepancies between purchased and sold quantities, which may indicate that a stock split has occurred. Research and add the correct split details.
               </p>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              {splitSuggestions.length > 0 ? (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid rgba(139, 92, 246, 0.3)' }}>
                       <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Symbol</th>
                       <th style={{ textAlign: 'left', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Issue Detected</th>
                       <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Bought</th>
                       <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Sold</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Likely Split</th>
                       <th style={{ textAlign: 'right', padding: '8px 12px', color: '#94a3b8', fontWeight: '500', fontSize: '13px' }}>Actions</th>
                     </tr>
                   </thead>
@@ -2141,16 +2203,11 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                         <td style={{ padding: '10px 12px', fontSize: '13px', color: '#94a3b8' }}>{suggestion.issue}</td>
                         <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '13px' }}>{suggestion.bought.toFixed(4)}</td>
                         <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '13px' }}>{suggestion.sold.toFixed(4)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                          <span style={{ padding: '4px 8px', background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', borderRadius: '4px', fontSize: '12px' }}>
-                            {suggestion.suggestedRatio}
-                          </span>
-                        </td>
                         <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                             <button
                               onClick={() => {
-                                const query = encodeURIComponent(`${suggestion.symbol} stock split ${suggestion.searchYear}`);
+                                const query = encodeURIComponent(`${suggestion.symbol} stock split history`);
                                 window.open(`https://www.google.com/search?q=${query}`, '_blank');
                               }}
                               style={{
@@ -2186,7 +2243,25 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                                 cursor: 'pointer'
                               }}
                             >
-                              + Add Split
+                              Add Split
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (!dismissedSplitSuggestions.includes(suggestion.symbol)) {
+                                  setDismissedSplitSuggestions(prev => [...prev, suggestion.symbol]);
+                                }
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                background: 'transparent',
+                                color: '#f87171',
+                                border: '1px solid rgba(239, 68, 68, 0.5)',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              Remove
                             </button>
                           </div>
                         </td>
@@ -2195,6 +2270,11 @@ const fetchStockSplits = async (symbol, showAlerts = true, dateRange = null) => 
                   </tbody>
                 </table>
               </div>
+              ) : (
+                <p style={{ color: '#64748b', textAlign: 'center', padding: '16px' }}>
+                  All suggestions have been dismissed or resolved.
+                </p>
+              )}
             </div>
           )}
 
